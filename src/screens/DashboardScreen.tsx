@@ -1,3 +1,9 @@
+/**
+ * @module screens/DashboardScreen
+ * Analytics screen displaying multi-store portfolio valuation KPIs and all 12 interactive
+ * portfolio/market charts (evolution, rankings, ROI distribution, periods, and benchmarks).
+ */
+
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -7,19 +13,13 @@ import {
   Text,
   View,
 } from 'react-native';
-import {
-  HorizontalRankingChart,
-  type HorizontalBarItem,
-} from '../components/charts/HorizontalRankingChart';
-import {
-  MultiSeriesLineChart,
-  type ChartReferenceLine,
-  type LineChartSeries,
-} from '../components/charts/MultiSeriesLineChart';
+import { HorizontalRankingChart } from '../components/charts/HorizontalRankingChart';
+import { MultiSeriesLineChart } from '../components/charts/MultiSeriesLineChart';
 import {
   VerticalBarChart,
   type VerticalBarDatum,
 } from '../components/charts/VerticalBarChart';
+import { SegmentedToggle } from '../components/shared/FormControls';
 import rawMarketIndices from '../data/seedMarketIndices.json';
 import { getTranslations } from '../i18n/translations';
 import {
@@ -29,7 +29,6 @@ import {
 } from '../theme/tokens';
 import {
   PRICE_SOURCES,
-  type AppLanguage,
   type AppPreferences,
   type CardHolding,
   type CardPriceHistoryMap,
@@ -46,20 +45,32 @@ import {
   computeRoiBuckets,
   computeSourceUnitPriceEur,
   formatMoney,
-  formatShortDate,
   formatSignedMoney,
   formatSignedPct,
-  getCardPrimaryName,
-  round2,
-  slicePortfolioHistory,
   type CardWithMetrics,
 } from '../utils/cardMath';
+import {
+  createGainLossRankingItems,
+  createMarketIndexChartsData,
+  createProfitChartData,
+  createRoiChartData,
+  createTopValuableRankingItems,
+  createValueChartData,
+  formatBarRangeSummary,
+  formatCompositePts,
+  type BasisMode,
+  type StoreCompareMode,
+} from '../utils/chartSeriesFactory';
 
 const MARKET_INDICES = rawMarketIndices as MarketIndicesData;
 
-type DashboardCategory = 'all' | 'evolution' | 'rankings' | 'periods' | 'indices';
-type StoreCompareMode = 'single' | 'multi';
-type BasisMode = 'unit' | 'total';
+/** Filter category controlling which analytics sections are visible. */
+export type DashboardCategory =
+  | 'all'
+  | 'evolution'
+  | 'rankings'
+  | 'periods'
+  | 'indices';
 
 const CATEGORIES: DashboardCategory[] = [
   'all',
@@ -69,7 +80,8 @@ const CATEGORIES: DashboardCategory[] = [
   'indices',
 ];
 
-interface DashboardScreenProps {
+/** Props accepted by {@link DashboardScreen}. */
+export interface DashboardScreenProps {
   cards: CardHolding[];
   priceHistoryByCard: Record<string, CardPriceHistoryMap>;
   loading: boolean;
@@ -80,97 +92,13 @@ interface DashboardScreenProps {
   onSelectCard: (cardId: string) => void;
 }
 
-function getStoreSeriesColor(source: PriceSource, isDark: boolean): string {
-  switch (source) {
-    case 'Cardmarket':
-      return isDark ? '#60A5FA' : '#2563EB';
-    case 'Scryfall':
-      return isDark ? '#2DD4BF' : '#0D9488';
-    case 'TCGPlayer':
-      return isDark ? '#FBBF24' : '#D97706';
-    case 'CardKingdom':
-      return isDark ? '#A78BFA' : '#7C3AED';
-    case 'ManaPool':
-      return isDark ? '#F472B6' : '#DB2777';
-  }
-}
-
-function formatMarketWeekAxisLabel(
-  rawWeek: string,
-  language: AppLanguage,
-): string {
-  const match = /(\d{2})\/(\d{2})/.exec(rawWeek);
-  if (!match) {
-    return rawWeek;
-  }
-  const isoApprox = `2026-${match[2]}-${match[1]}`;
-  return formatShortDate(isoApprox, language);
-}
-
-function formatCompositePts(
-  val: number,
-  language: AppLanguage,
-  ptsUnit: string,
-  signed = false,
-): string {
-  const fixed = Math.abs(val).toFixed(2);
-  const localized = language === 'es' ? fixed.replace('.', ',') : fixed;
-  const sign = signed ? (val > 0 ? '+' : val < 0 ? '-' : '') : val < 0 ? '-' : '';
-  return `${sign}${localized} ${ptsUnit}`;
-}
-
-interface SegmentedToggleProps<T extends string> {
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (next: T) => void;
-  theme: AppTheme;
-}
-
-function SegmentedToggle<T extends string>({
-  value,
-  options,
-  onChange,
-  theme,
-}: SegmentedToggleProps<T>) {
-  return (
-    <View
-      style={[
-        styles.segmentedGroup,
-        { backgroundColor: theme.surfaceSubtle },
-      ]}
-    >
-      {options.map((opt) => {
-        const active = value === opt.value;
-        return (
-          <Pressable
-            key={opt.value}
-            onPress={() => onChange(opt.value)}
-            hitSlop={4}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            style={[
-              styles.segmentedBtn,
-              active && { backgroundColor: theme.surface },
-            ]}
-          >
-            <Text
-              style={[
-                styles.segmentedBtnText,
-                {
-                  color: active ? theme.accent : theme.muted,
-                  fontWeight: active ? '700' : '500',
-                },
-              ]}
-            >
-              {opt.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
+/**
+ * Portfolio analytics dashboard combining store switching, 2×2 KPI summary cards,
+ * section filter pills, and all 12 spreadsheet-equivalent interactive SVG/list charts.
+ *
+ * @param props Portfolio holdings, historical store quotes, theme, preferences, and card selection callback.
+ * @returns Scrollable analytics dashboard view.
+ */
 export function DashboardScreen({
   cards,
   priceHistoryByCard,
@@ -189,7 +117,6 @@ export function DashboardScreen({
   const [activeCategory, setActiveCategory] =
     useState<DashboardCategory>('all');
 
-  // Evolution chart states
   const [valueMode, setValueMode] = useState<StoreCompareMode>('single');
   const [valueRange, setValueRange] = useState<HistoryRange>('all');
   const [profitMode, setProfitMode] = useState<StoreCompareMode>('single');
@@ -197,7 +124,6 @@ export function DashboardScreen({
   const [roiMode, setRoiMode] = useState<StoreCompareMode>('multi');
   const [roiRange, setRoiRange] = useState<HistoryRange>('all');
 
-  // Unit vs Total toggles for Gain/Loss Top 10
   const [gainBasis, setGainBasis] = useState<BasisMode>('unit');
   const [lossBasis, setLossBasis] = useState<BasisMode>('unit');
 
@@ -268,566 +194,165 @@ export function DashboardScreen({
     [cardItems],
   );
 
-  // Chart #1: Value vs Cost Series
-  const valueChartData = useMemo(() => {
-    const activePts = activeHistoryResult.points;
-    const slicedActive = slicePortfolioHistory(activePts, valueRange);
-    let deltaBadge: { text: string; color: string } | null = null;
-    if (valueMode === 'single' && slicedActive.length >= 2) {
-      const first = slicedActive[0];
-      const last = slicedActive[slicedActive.length - 1];
-      const deltaEur = round2(last.market - first.market);
-      const deltaPct = first.market > 0 ? (deltaEur / first.market) * 100 : null;
-      const color =
-        deltaEur === 0 ? theme.muted : deltaEur > 0 ? theme.gain : theme.loss;
-      deltaBadge = {
-        text: `${formatSignedMoney(deltaEur, preferences)}${deltaPct !== null ? ` (${formatSignedPct(deltaPct, preferences.language)})` : ''}`,
-        color,
-      };
-    }
+  const valueChartData = useMemo(
+    () =>
+      createValueChartData(
+        allStoreHistories,
+        selectedSource,
+        valueMode,
+        valueRange,
+        theme,
+        preferences,
+        t,
+      ),
+    [
+      allStoreHistories,
+      preferences,
+      selectedSource,
+      t,
+      theme,
+      valueMode,
+      valueRange,
+    ],
+  );
 
-    let series: LineChartSeries[] = [];
-    if (valueMode === 'single') {
-      series = [
-        {
-          id: 'market',
-          label: t.dashboard.legendValue,
-          color: theme.accent,
-          filled: true,
-          points: activePts.map((pt) => ({
-            key: pt.date,
-            axisLabel: formatShortDate(pt.date, preferences.language),
-            value: pt.market,
-          })),
-        },
-        {
-          id: 'cost',
-          label: t.dashboard.legendCost,
-          color: theme.muted,
-          dashed: true,
-          points: activePts.map((pt) => ({
-            key: pt.date,
-            axisLabel: formatShortDate(pt.date, preferences.language),
-            value: pt.cost,
-          })),
-        },
-      ];
-    } else {
-      series = [
-        ...PRICE_SOURCES.map((src) => ({
-          id: src,
-          label: src,
-          color: getStoreSeriesColor(src, isDark),
-          filled: src === selectedSource,
-          strokeWidth: src === selectedSource ? 2.4 : 1.7,
-          points: allStoreHistories[src].points.map((pt) => ({
-            key: pt.date,
-            axisLabel: formatShortDate(pt.date, preferences.language),
-            value: pt.market,
-          })),
-        })),
-        {
-          id: 'cost',
-          label: t.dashboard.legendCost,
-          color: theme.muted,
-          dashed: true,
-          points: activePts.map((pt) => ({
-            key: pt.date,
-            axisLabel: formatShortDate(pt.date, preferences.language),
-            value: pt.cost,
-          })),
-        },
-      ];
-    }
-    return { series, deltaBadge };
-  }, [
-    activeHistoryResult.points,
-    allStoreHistories,
-    isDark,
-    preferences,
-    selectedSource,
-    t.dashboard.legendCost,
-    t.dashboard.legendValue,
-    theme.accent,
-    theme.gain,
-    theme.loss,
-    theme.muted,
-    valueMode,
-    valueRange,
-  ]);
+  const profitChartData = useMemo(
+    () =>
+      createProfitChartData(
+        allStoreHistories,
+        selectedSource,
+        profitMode,
+        profitRange,
+        theme,
+        preferences,
+        t,
+      ),
+    [
+      allStoreHistories,
+      preferences,
+      profitMode,
+      profitRange,
+      selectedSource,
+      t,
+      theme,
+    ],
+  );
 
-  // Chart #2: Net Profit & Range Peak
-  const profitChartData = useMemo(() => {
-    const activePts = activeHistoryResult.points;
-    const slicedActive = slicePortfolioHistory(activePts, profitRange);
-    let deltaBadge: { text: string; color: string } | null = null;
-    if (profitMode === 'single' && slicedActive.length >= 2) {
-      const first = slicedActive[0];
-      const last = slicedActive[slicedActive.length - 1];
-      const deltaEur = round2(last.profit - first.profit);
-      const color =
-        deltaEur === 0 ? theme.muted : deltaEur > 0 ? theme.gain : theme.loss;
-      deltaBadge = {
-        text: formatSignedMoney(deltaEur, preferences),
-        color,
-      };
-    }
-
-    let rangeMin = Number.POSITIVE_INFINITY;
-    let rangePeak = Number.NEGATIVE_INFINITY;
-    const refPool =
-      profitMode === 'single'
-        ? slicedActive
-        : PRICE_SOURCES.flatMap((src) =>
-            slicePortfolioHistory(allStoreHistories[src].points, profitRange),
-          );
-    for (const pt of refPool) {
-      if (pt.profit < rangeMin) rangeMin = pt.profit;
-      if (pt.profit > rangePeak) rangePeak = pt.profit;
-    }
-
-    const referenceLines: ChartReferenceLine[] = [];
-    if (Number.isFinite(rangeMin) && rangeMin < 50) {
-      referenceLines.push({
-        id: 'zero',
-        value: 0,
-        color: theme.muted,
-        dashed: true,
-        includeInBounds: true,
-      });
-    }
-    if (Number.isFinite(rangePeak)) {
-      referenceLines.push({
-        id: 'peak',
-        value: rangePeak,
-        color: theme.gain,
-        dashed: true,
-        includeInBounds: false,
-      });
-    }
-
-    const lastActiveProfit =
-      slicedActive.length > 0 ? slicedActive[slicedActive.length - 1].profit : 0;
-
-    const series: LineChartSeries[] =
-      profitMode === 'single'
-        ? [
-            {
-              id: 'profit',
-              label: selectedSource,
-              color: lastActiveProfit >= 0 ? theme.gain : theme.loss,
-              filled: true,
-              points: activePts.map((pt) => ({
-                key: pt.date,
-                axisLabel: formatShortDate(pt.date, preferences.language),
-                value: pt.profit,
-              })),
-            },
-          ]
-        : PRICE_SOURCES.map((src) => ({
-            id: src,
-            label: src,
-            color: getStoreSeriesColor(src, isDark),
-            filled: src === selectedSource,
-            strokeWidth: src === selectedSource ? 2.4 : 1.7,
-            points: allStoreHistories[src].points.map((pt) => ({
-              key: pt.date,
-              axisLabel: formatShortDate(pt.date, preferences.language),
-              value: pt.profit,
-            })),
-          }));
-
-    const footnote = Number.isFinite(rangePeak)
-      ? t.dashboard.profitPeakRef(formatSignedMoney(rangePeak, preferences))
-      : null;
-
-    return { series, deltaBadge, referenceLines, footnote };
-  }, [
-    activeHistoryResult.points,
-    allStoreHistories,
-    isDark,
-    preferences,
-    profitMode,
-    profitRange,
-    selectedSource,
-    t.dashboard,
-    theme.gain,
-    theme.loss,
-    theme.muted,
-  ]);
-
-  // Chart #3: ROI (%) Evolution
-  const roiChartData = useMemo(() => {
-    const activePts = activeHistoryResult.points;
-    const slicedActive = slicePortfolioHistory(activePts, roiRange);
-    let deltaBadge: { text: string; color: string } | null = null;
-    if (roiMode === 'single' && slicedActive.length >= 1) {
-      const lastRoi = slicedActive[slicedActive.length - 1].roiPct;
-      if (lastRoi !== null) {
-        deltaBadge = {
-          text: formatSignedPct(lastRoi, preferences.language),
-          color:
-            lastRoi === 0
-              ? theme.muted
-              : lastRoi > 0
-                ? theme.gain
-                : theme.loss,
-        };
-      }
-    }
-
-    const refPool =
-      roiMode === 'single'
-        ? slicedActive
-        : PRICE_SOURCES.flatMap((src) =>
-            slicePortfolioHistory(allStoreHistories[src].points, roiRange),
-          );
-    let minRoi = Number.POSITIVE_INFINITY;
-    for (const pt of refPool) {
-      if (pt.roiPct !== null && pt.roiPct < minRoi) {
-        minRoi = pt.roiPct;
-      }
-    }
-
-    const referenceLines: ChartReferenceLine[] = [
-      {
-        id: 'roi-zero',
-        value: 0,
-        color: theme.muted,
-        dashed: true,
-        includeInBounds: Number.isFinite(minRoi) && minRoi < 10,
-      },
-    ];
-
-    const series: LineChartSeries[] =
-      roiMode === 'single'
-        ? [
-            {
-              id: 'roi',
-              label: selectedSource,
-              color: theme.accent,
-              filled: true,
-              points: activePts
-                .filter((pt) => pt.roiPct !== null)
-                .map((pt) => ({
-                  key: pt.date,
-                  axisLabel: formatShortDate(pt.date, preferences.language),
-                  value: pt.roiPct as number,
-                })),
-            },
-          ]
-        : PRICE_SOURCES.map((src) => ({
-            id: src,
-            label: src,
-            color: getStoreSeriesColor(src, isDark),
-            filled: src === selectedSource,
-            strokeWidth: src === selectedSource ? 2.4 : 1.7,
-            points: allStoreHistories[src].points
-              .filter((pt) => pt.roiPct !== null)
-              .map((pt) => ({
-                key: pt.date,
-                axisLabel: formatShortDate(pt.date, preferences.language),
-                value: pt.roiPct as number,
-              })),
-          }));
-
-    return { series, deltaBadge, referenceLines };
-  }, [
-    activeHistoryResult.points,
-    allStoreHistories,
-    isDark,
-    preferences.language,
-    roiMode,
-    roiRange,
-    selectedSource,
-    theme.accent,
-    theme.gain,
-    theme.loss,
-    theme.muted,
-  ]);
-
-  // Chart #4: Top 20 Most Valuable Cards (stacked cost + profit)
-  const top20Items = useMemo<HorizontalBarItem[]>(() => {
-    const costBarColor = isDark ? '#64748B' : '#94A3B8';
-    const lossShortfallColor = isDark
-      ? 'rgba(248, 113, 113, 0.35)'
-      : 'rgba(220, 38, 38, 0.25)';
-
-    return [...cardItems]
-      .sort(
-        (a, b) =>
-          b.metrics.totalMarket - a.metrics.totalMarket ||
-          b.metrics.profit - a.metrics.profit,
-      )
-      .slice(0, 20)
-      .map(({ card, metrics }) => {
-        const qty = Math.max(1, card.quantity || 1);
-        const name = getCardPrimaryName(card, preferences.language);
-        const isProfit = metrics.profit >= 0;
-        const secondaryText =
-          metrics.totalCost > 0
-            ? `${formatSignedMoney(metrics.profit, preferences)} (${formatSignedPct(metrics.roiPct, preferences.language)})`
-            : formatSignedMoney(metrics.profit, preferences);
-
-        return {
-          cardId: card.id,
-          primaryName: name,
-          metaText: `${card.setCode} · ${card.condition}${qty > 1 ? ` · ×${qty}` : ''} · ${t.dashboard.purchaseLabel(formatMoney(metrics.totalCost, preferences))}`,
-          rightPrimary: formatMoney(metrics.totalMarket, preferences),
-          rightPrimaryColor: theme.text,
-          rightSecondary: secondaryText,
-          primaryBarAmount: isProfit ? metrics.totalCost : metrics.totalMarket,
-          secondaryBarAmount: isProfit
-            ? metrics.profit
-            : Math.abs(metrics.profit),
-          primaryBarColor: isProfit ? costBarColor : theme.accent,
-          secondaryBarColor: isProfit ? theme.gain : lossShortfallColor,
-        };
-      });
-  }, [cardItems, isDark, preferences, t.dashboard, theme.accent, theme.gain, theme.text]);
-
-  // Chart #5: 8 ROI Bucket Bars
-  const roiBucketBars = useMemo<VerticalBarDatum[]>(() => {
-    return roiDistribution.buckets.map((bucket) => ({
-      key: bucket.key,
-      tickLabel: bucket.compactLabel,
-      inspectLabel: bucket.label,
-      value: bucket.count,
-      positive: !bucket.isNegative,
-    }));
-  }, [roiDistribution.buckets]);
-
-  // Chart #6: Top 10 Highest Profit
-  const topGainItems = useMemo<HorizontalBarItem[]>(() => {
-    const withVal = cardItems
-      .map((item) => {
-        const qty = Math.max(1, item.card.quantity || 1);
-        const amount =
-          gainBasis === 'unit'
-            ? round2(item.metrics.profit / qty)
-            : item.metrics.profit;
-        const costShown =
-          gainBasis === 'unit'
-            ? round2(item.metrics.totalCost / qty)
-            : item.metrics.totalCost;
-        return { item, qty, amount, costShown };
-      })
-      .filter((x) => x.amount > 0)
-      .sort(
-        (a, b) =>
-          b.amount - a.amount ||
-          b.item.metrics.totalMarket - a.item.metrics.totalMarket,
-      )
-      .slice(0, 10);
-
-    return withVal.map(({ item, qty, amount, costShown }) => ({
-      cardId: item.card.id,
-      primaryName: getCardPrimaryName(item.card, preferences.language),
-      metaText: `${item.card.setCode} · ${item.card.condition}${qty > 1 ? ` · ×${qty}` : ''} · ${t.dashboard.purchaseLabel(formatMoney(costShown, preferences))}`,
-      rightPrimary: formatSignedMoney(amount, preferences),
-      rightPrimaryColor: theme.gain,
-      rightSecondary: formatSignedPct(
-        item.metrics.roiPct,
+  const roiChartData = useMemo(
+    () =>
+      createRoiChartData(
+        allStoreHistories,
+        selectedSource,
+        roiMode,
+        roiRange,
+        theme,
         preferences.language,
       ),
-      primaryBarAmount: amount,
-      primaryBarColor: theme.gain,
-    }));
-  }, [cardItems, gainBasis, preferences, t.dashboard, theme.gain]);
+    [
+      allStoreHistories,
+      preferences.language,
+      roiMode,
+      roiRange,
+      selectedSource,
+      theme,
+    ],
+  );
 
-  // Chart #7: Top 10 Biggest Loss
-  const topLossItems = useMemo<HorizontalBarItem[]>(() => {
-    const withVal = cardItems
-      .map((item) => {
-        const qty = Math.max(1, item.card.quantity || 1);
-        const amount =
-          lossBasis === 'unit'
-            ? round2(item.metrics.profit / qty)
-            : item.metrics.profit;
-        const costShown =
-          lossBasis === 'unit'
-            ? round2(item.metrics.totalCost / qty)
-            : item.metrics.totalCost;
-        return { item, qty, amount, costShown };
-      })
-      .filter((x) => x.amount < 0)
-      .sort(
-        (a, b) =>
-          a.amount - b.amount ||
-          b.item.metrics.totalCost - a.item.metrics.totalCost,
-      )
-      .slice(0, 10);
+  const top20Items = useMemo(
+    () => createTopValuableRankingItems(cardItems, theme, preferences, t),
+    [cardItems, preferences, t, theme],
+  );
 
-    return withVal.map(({ item, qty, amount, costShown }) => ({
-      cardId: item.card.id,
-      primaryName: getCardPrimaryName(item.card, preferences.language),
-      metaText: `${item.card.setCode} · ${item.card.condition}${qty > 1 ? ` · ×${qty}` : ''} · ${t.dashboard.purchaseLabel(formatMoney(costShown, preferences))}`,
-      rightPrimary: formatSignedMoney(amount, preferences),
-      rightPrimaryColor: theme.loss,
-      rightSecondary: formatSignedPct(
-        item.metrics.roiPct,
-        preferences.language,
+  const roiBucketBars = useMemo<VerticalBarDatum[]>(
+    () =>
+      roiDistribution.buckets.map((bucket) => ({
+        key: bucket.key,
+        tickLabel: bucket.compactLabel,
+        inspectLabel: bucket.label,
+        value: bucket.count,
+        positive: !bucket.isNegative,
+      })),
+    [roiDistribution.buckets],
+  );
+
+  const topGainItems = useMemo(
+    () =>
+      createGainLossRankingItems(
+        cardItems,
+        'gain',
+        gainBasis,
+        theme,
+        preferences,
+        t,
       ),
-      primaryBarAmount: Math.abs(amount),
-      primaryBarColor: theme.loss,
-    }));
-  }, [cardItems, lossBasis, preferences, t.dashboard, theme.loss]);
+    [cardItems, gainBasis, preferences, t, theme],
+  );
 
-  // Chart #8: Last 20 Weeks Profit Bars
-  const weeklyBars = useMemo<VerticalBarDatum[]>(() => {
-    return weeklyProfitPoints.map((pt) => ({
-      key: pt.key,
-      tickLabel: pt.label,
-      value: pt.profitEur,
-      positive: pt.profitEur >= 0,
-    }));
-  }, [weeklyProfitPoints]);
-
-  const weeklySummaryText = useMemo(() => {
-    if (weeklyBars.length === 0) return null;
-    const vals = weeklyBars.map((b) => b.value);
-    const minV = Math.min(...vals);
-    const maxV = Math.max(...vals);
-    const lastV = vals[vals.length - 1];
-    return `${t.dashboard.minLabel(formatSignedMoney(minV, preferences))} · ${t.dashboard.maxLabel(formatSignedMoney(maxV, preferences))} · ${t.dashboard.currentLabel(formatSignedMoney(lastV, preferences))}`;
-  }, [preferences, t.dashboard, weeklyBars]);
-
-  // Chart #9: Last 20 Months Profit Bars
-  const monthlyBars = useMemo<VerticalBarDatum[]>(() => {
-    return monthlyProfitPoints.map((pt) => ({
-      key: pt.key,
-      tickLabel: pt.label,
-      value: pt.profitEur,
-      positive: pt.profitEur >= 0,
-    }));
-  }, [monthlyProfitPoints]);
-
-  const monthlySummaryText = useMemo(() => {
-    if (monthlyBars.length === 0) return null;
-    const vals = monthlyBars.map((b) => b.value);
-    const minV = Math.min(...vals);
-    const maxV = Math.max(...vals);
-    const lastV = vals[vals.length - 1];
-    return `${t.dashboard.minLabel(formatSignedMoney(minV, preferences))} · ${t.dashboard.maxLabel(formatSignedMoney(maxV, preferences))} · ${t.dashboard.currentLabel(formatSignedMoney(lastV, preferences))}`;
-  }, [monthlyBars, preferences, t.dashboard]);
-
-  // Charts #10, #11, #12: Cardmarket Market Indices
-  const marketIndexCharts = useMemo(() => {
-    const weekLabels = MARKET_INDICES.weeks.map((raw, idx) => ({
-      key: String(idx).padStart(2, '0'),
-      axisLabel: formatMarketWeekAxisLabel(raw, preferences.language),
-    }));
-
-    const normalizeSeries = (
-      id: string,
-      label: string,
-      color: string,
-      values: number[],
-    ): LineChartSeries => {
-      const base = values[0] || 1;
-      const lastVal = values[values.length - 1] ?? 0;
-      const pctChange = ((lastVal - base) / base) * 100;
-      return {
-        id,
-        label,
-        color,
-        formattedLatest: `${formatMoney(lastVal, preferences)} (${formatSignedPct(pctChange, preferences.language)})`,
-        points: values.map((v, idx) => ({
-          key: weekLabels[idx].key,
-          axisLabel: weekLabels[idx].axisLabel,
-          value: Math.round((v / base) * 10000) / 100,
-        })),
-      };
-    };
-
-    const collectSeries: LineChartSeries[] = [
-      normalizeSeries(
-        'dualLands',
-        t.dashboard.indexDualLands,
-        isDark ? '#60A5FA' : '#2563EB',
-        MARKET_INDICES.collectibles.dualLands10,
+  const topLossItems = useMemo(
+    () =>
+      createGainLossRankingItems(
+        cardItems,
+        'loss',
+        lossBasis,
+        theme,
+        preferences,
+        t,
       ),
-      normalizeSeries(
-        'powerNine',
-        t.dashboard.indexPowerNine,
-        isDark ? '#FBBF24' : '#D97706',
-        MARKET_INDICES.collectibles.powerNine,
-      ),
-      normalizeSeries(
-        'rlStaples',
-        t.dashboard.indexRlStaples,
-        isDark ? '#2DD4BF' : '#0D9488',
-        MARKET_INDICES.collectibles.rlStaples,
-      ),
-    ];
+    [cardItems, lossBasis, preferences, t, theme],
+  );
 
-    const activeSeries: LineChartSeries[] = [
-      {
-        id: 'commander',
-        label: t.dashboard.indexCommander,
-        color: isDark ? '#60A5FA' : '#2563EB',
-        filled: true,
-        points: MARKET_INDICES.activePlay.commanderBlueChips.map((v, idx) => ({
-          key: weekLabels[idx].key,
-          axisLabel: weekLabels[idx].axisLabel,
-          value: v,
-        })),
-      },
-      {
-        id: 'fetchlands',
-        label: t.dashboard.indexFetchlands,
-        color: isDark ? '#2DD4BF' : '#0D9488',
-        points: MARKET_INDICES.activePlay.fetchlands10.map((v, idx) => ({
-          key: weekLabels[idx].key,
-          axisLabel: weekLabels[idx].axisLabel,
-          value: v,
-        })),
-      },
-    ];
+  const weeklyBars = useMemo<VerticalBarDatum[]>(
+    () =>
+      weeklyProfitPoints.map((pt) => ({
+        key: pt.key,
+        tickLabel: pt.label,
+        value: pt.profitEur,
+        positive: pt.profitEur >= 0,
+      })),
+    [weeklyProfitPoints],
+  );
 
-    const compVals = MARKET_INDICES.compositeBase100;
-    const compFirst = compVals[0] ?? 100;
-    const compLast = compVals[compVals.length - 1] ?? 100;
-    const compDelta = round2(compLast - compFirst);
-    const compDeltaPct = compFirst > 0 ? (compDelta / compFirst) * 100 : 0;
+  const weeklySummaryText = useMemo(
+    () => formatBarRangeSummary(weeklyBars, preferences, t),
+    [preferences, t, weeklyBars],
+  );
 
-    const compositeSeries: LineChartSeries[] = [
-      {
-        id: 'composite',
-        label: t.dashboard.indexComposite,
-        color: theme.accent,
-        filled: true,
-        points: compVals.map((v, idx) => ({
-          key: weekLabels[idx].key,
-          axisLabel: weekLabels[idx].axisLabel,
-          value: v,
-        })),
-      },
-    ];
+  const monthlyBars = useMemo<VerticalBarDatum[]>(
+    () =>
+      monthlyProfitPoints.map((pt) => ({
+        key: pt.key,
+        tickLabel: pt.label,
+        value: pt.profitEur,
+        positive: pt.profitEur >= 0,
+      })),
+    [monthlyProfitPoints],
+  );
 
-    return {
-      collectSeries,
-      activeSeries,
-      compositeSeries,
-      compositeDelta: {
-        text: `${formatCompositePts(compDelta, preferences.language, t.dashboard.ptsUnit, true)} (${formatSignedPct(compDeltaPct, preferences.language)})`,
-        color:
-          compDelta === 0
-            ? theme.muted
-            : compDelta > 0
-              ? theme.gain
-              : theme.loss,
-      },
-    };
-  }, [
-    isDark,
-    preferences,
-    t.dashboard,
-    theme.accent,
-    theme.gain,
-    theme.loss,
-    theme.muted,
-  ]);
+  const monthlySummaryText = useMemo(
+    () => formatBarRangeSummary(monthlyBars, preferences, t),
+    [monthlyBars, preferences, t],
+  );
+
+  const marketIndexCharts = useMemo(
+    () => createMarketIndexChartsData(MARKET_INDICES, theme, preferences, t),
+    [preferences, t, theme],
+  );
+
+  const storeToggleOptions = useMemo(
+    () => [
+      { value: 'single' as const, label: t.dashboard.modeActiveStore },
+      { value: 'multi' as const, label: t.dashboard.modeMultiStore },
+    ],
+    [t.dashboard.modeActiveStore, t.dashboard.modeMultiStore],
+  );
+
+  const basisToggleOptions = useMemo(
+    () => [
+      { value: 'unit' as const, label: t.dashboard.modeUnit },
+      { value: 'total' as const, label: t.dashboard.modeTotal },
+    ],
+    [t.dashboard.modeTotal, t.dashboard.modeUnit],
+  );
 
   const peakValueEur = Math.max(
     summary.totalMarket,
@@ -903,7 +428,6 @@ export function DashboardScreen({
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header */}
       <View style={styles.headerBlock}>
         <Text
           style={[styles.eyebrow, { color: theme.muted }]}
@@ -912,7 +436,6 @@ export function DashboardScreen({
         >
           {t.dashboard.eyebrow} · {preferences.currency}
         </Text>
-
         <Text style={[styles.screenTitle, { color: theme.text }]}>
           {t.dashboard.title}
         </Text>
@@ -934,7 +457,6 @@ export function DashboardScreen({
         </View>
       ) : (
         <>
-          {/* Source Selector Chips */}
           <View style={styles.sourceSection}>
             <View style={styles.sourceMetaRow}>
               <Text style={[styles.sourceLabel, { color: theme.muted }]}>
@@ -989,7 +511,6 @@ export function DashboardScreen({
             </ScrollView>
           </View>
 
-          {/* 2x2 KPI Grid */}
           <View style={styles.kpiGrid}>
             <View style={styles.kpiRow}>
               <View
@@ -1125,7 +646,6 @@ export function DashboardScreen({
             </View>
           </View>
 
-          {/* Chart Category Filter Pills */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -1166,14 +686,12 @@ export function DashboardScreen({
             })}
           </ScrollView>
 
-          {/* SECTION 1: EVOLUTION (Charts #1, #2, #3) */}
           {showEvolution ? (
             <View style={styles.sectionBlock}>
               <Text style={[styles.sectionEyebrow, { color: theme.muted }]}>
                 {t.dashboard.sections.evolution}
               </Text>
 
-              {/* Chart 1: Portfolio Value vs Invested Cost */}
               <MultiSeriesLineChart
                 title={t.dashboard.evolutionTitle}
                 subtitle={t.dashboard.evolutionSubtitle}
@@ -1190,10 +708,7 @@ export function DashboardScreen({
                     value={valueMode}
                     onChange={setValueMode}
                     theme={theme}
-                    options={[
-                      { value: 'single', label: t.dashboard.modeActiveStore },
-                      { value: 'multi', label: t.dashboard.modeMultiStore },
-                    ]}
+                    options={storeToggleOptions}
                   />
                 }
                 singleRecordLabel={t.detail.chartSingleRecord}
@@ -1201,7 +716,6 @@ export function DashboardScreen({
                 emptyText={t.dashboard.noChartData}
               />
 
-              {/* Chart 2: Net Profit Evolution + Peak */}
               <MultiSeriesLineChart
                 title={t.dashboard.profitTitle}
                 subtitle={t.dashboard.profitSubtitle}
@@ -1219,10 +733,7 @@ export function DashboardScreen({
                     value={profitMode}
                     onChange={setProfitMode}
                     theme={theme}
-                    options={[
-                      { value: 'single', label: t.dashboard.modeActiveStore },
-                      { value: 'multi', label: t.dashboard.modeMultiStore },
-                    ]}
+                    options={storeToggleOptions}
                   />
                 }
                 singleRecordLabel={t.detail.chartSingleRecord}
@@ -1231,7 +742,6 @@ export function DashboardScreen({
                 emptyText={t.dashboard.noChartData}
               />
 
-              {/* Chart 3: ROI (%) Evolution Multistore */}
               <MultiSeriesLineChart
                 title={t.dashboard.roiTitle}
                 subtitle={t.dashboard.roiSubtitle}
@@ -1249,10 +759,7 @@ export function DashboardScreen({
                     value={roiMode}
                     onChange={setRoiMode}
                     theme={theme}
-                    options={[
-                      { value: 'single', label: t.dashboard.modeActiveStore },
-                      { value: 'multi', label: t.dashboard.modeMultiStore },
-                    ]}
+                    options={storeToggleOptions}
                   />
                 }
                 singleRecordLabel={t.detail.chartSingleRecord}
@@ -1262,14 +769,12 @@ export function DashboardScreen({
             </View>
           ) : null}
 
-          {/* SECTION 2: RANKINGS & ROI DISTRIBUTION (Charts #4, #5, #6, #7) */}
           {showRankings ? (
             <View style={styles.sectionBlock}>
               <Text style={[styles.sectionEyebrow, { color: theme.muted }]}>
                 {t.dashboard.sections.rankings}
               </Text>
 
-              {/* Chart 4: Top 20 Most Valuable Cards (stacked Cost + Profit) */}
               <HorizontalRankingChart
                 title={t.dashboard.top20Title}
                 subtitle={t.dashboard.top20Subtitle}
@@ -1287,7 +792,6 @@ export function DashboardScreen({
                 onPressCard={onSelectCard}
               />
 
-              {/* Chart 5: ROI Distribution across 8 Excel Buckets */}
               <VerticalBarChart
                 title={t.dashboard.roiDistTitle}
                 subtitle={t.dashboard.roiDistSubtitle}
@@ -1306,7 +810,6 @@ export function DashboardScreen({
                 theme={theme}
               />
 
-              {/* Chart 6: Top 10 Highest Profit */}
               <HorizontalRankingChart
                 title={t.dashboard.topGainTitle}
                 subtitle={t.dashboard.topGainSubtitle}
@@ -1315,10 +818,7 @@ export function DashboardScreen({
                     value={gainBasis}
                     onChange={setGainBasis}
                     theme={theme}
-                    options={[
-                      { value: 'unit', label: t.dashboard.modeUnit },
-                      { value: 'total', label: t.dashboard.modeTotal },
-                    ]}
+                    options={basisToggleOptions}
                   />
                 }
                 items={topGainItems}
@@ -1328,7 +828,6 @@ export function DashboardScreen({
                 onPressCard={onSelectCard}
               />
 
-              {/* Chart 7: Top 10 Biggest Loss */}
               <HorizontalRankingChart
                 title={t.dashboard.topLossTitle}
                 subtitle={t.dashboard.topLossSubtitle}
@@ -1337,10 +836,7 @@ export function DashboardScreen({
                     value={lossBasis}
                     onChange={setLossBasis}
                     theme={theme}
-                    options={[
-                      { value: 'unit', label: t.dashboard.modeUnit },
-                      { value: 'total', label: t.dashboard.modeTotal },
-                    ]}
+                    options={basisToggleOptions}
                   />
                 }
                 items={topLossItems}
@@ -1352,14 +848,12 @@ export function DashboardScreen({
             </View>
           ) : null}
 
-          {/* SECTION 3: WEEKLY & MONTHLY PROFIT (Charts #8, #9) */}
           {showPeriods ? (
             <View style={styles.sectionBlock}>
               <Text style={[styles.sectionEyebrow, { color: theme.muted }]}>
                 {t.dashboard.sections.periods}
               </Text>
 
-              {/* Chart 8: Last 20 Weeks Profit */}
               <VerticalBarChart
                 title={t.dashboard.weeklyTitle}
                 subtitle={t.dashboard.weeklySubtitle}
@@ -1371,7 +865,6 @@ export function DashboardScreen({
                 theme={theme}
               />
 
-              {/* Chart 9: Last 20 Months Profit */}
               <VerticalBarChart
                 title={t.dashboard.monthlyTitle}
                 subtitle={t.dashboard.monthlySubtitle}
@@ -1385,14 +878,12 @@ export function DashboardScreen({
             </View>
           ) : null}
 
-          {/* SECTION 4: MARKET INDICES (Charts #10, #11, #12) */}
           {showIndices ? (
             <View style={styles.sectionBlock}>
               <Text style={[styles.sectionEyebrow, { color: theme.muted }]}>
                 {t.dashboard.sections.indices}
               </Text>
 
-              {/* Chart 10: Collectibles Indices (Base 100 normalized so Duals/RL vs Power9 stay sharp) */}
               <MultiSeriesLineChart
                 title={t.dashboard.indicesCollectTitle}
                 subtitle={t.dashboard.indicesCollectSubtitle}
@@ -1416,7 +907,6 @@ export function DashboardScreen({
                 emptyText={t.dashboard.noChartData}
               />
 
-              {/* Chart 11: Active Play Indices */}
               <MultiSeriesLineChart
                 title={t.dashboard.indicesActiveTitle}
                 subtitle={t.dashboard.indicesActiveSubtitle}
@@ -1429,7 +919,6 @@ export function DashboardScreen({
                 emptyText={t.dashboard.noChartData}
               />
 
-              {/* Chart 12: General MTG Composite Base 100 */}
               <MultiSeriesLineChart
                 title={t.dashboard.indicesCompositeTitle}
                 subtitle={t.dashboard.indicesCompositeSubtitle}
@@ -1566,21 +1055,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
     marginBottom: -4,
     paddingLeft: 2,
-  },
-  segmentedGroup: {
-    flexDirection: 'row',
-    borderRadius: 9,
-    padding: 2,
-    gap: 2,
-    flexShrink: 0,
-  },
-  segmentedBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 7,
-  },
-  segmentedBtnText: {
-    fontSize: 11,
   },
   centerState: {
     flex: 1,

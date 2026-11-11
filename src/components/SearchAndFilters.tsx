@@ -1,3 +1,8 @@
+/**
+ * @module components/SearchAndFilters
+ * Diacritic-insensitive search input, profit/cost filter pills, and sort selector modal.
+ */
+
 import React, { useState } from 'react';
 import {
   Modal,
@@ -16,6 +21,7 @@ import {
 } from '../theme/tokens';
 import type { AppLanguage, CardFilter, CardSort } from '../types/card';
 
+/** Live item counts displayed next to each profit/cost filter pill. */
 export interface FilterCounts {
   all: number;
   gain: number;
@@ -23,7 +29,8 @@ export interface FilterCounts {
   zeroCost: number;
 }
 
-interface SearchAndFiltersProps {
+/** Props accepted by {@link SearchAndFilters}. */
+export interface SearchAndFiltersProps {
   query: string;
   onChangeQuery: (value: string) => void;
   activeFilter: CardFilter;
@@ -38,6 +45,12 @@ interface SearchAndFiltersProps {
 const FILTER_KEYS: CardFilter[] = ['all', 'gain', 'loss', 'zeroCost'];
 const SORT_KEYS: CardSort[] = ['value', 'profit', 'loss', 'roi', 'name', 'date'];
 
+/**
+ * Renders collection search bar, horizontal status filter pills, and centered sort picker dialog.
+ *
+ * @param props Current search query, filter/sort selection, live counts, theme, and UI language.
+ * @returns Search and filter bar container.
+ */
 export function SearchAndFilters({
   query,
   onChangeQuery,

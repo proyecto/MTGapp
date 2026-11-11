@@ -1,19 +1,13 @@
+/**
+ * @module components/SettingsModal
+ * Slide-up preferences modal managing language (`ES`/`EN`), extensible theme registry
+ * selection (`THEME_REGISTRY`), display currency (`EUR`/`USD`), and manual FX rate input.
+ */
+
 import React, { useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { getTranslations } from '../i18n/translations';
 import {
-  CARD_SHADOW_STYLE,
   TABULAR_NUMS_STYLE,
   THEME_REGISTRY,
   type AppTheme,
@@ -29,8 +23,10 @@ import {
   normalizeExchangeRate,
   parseDecimalInput,
 } from '../utils/cardMath';
+import { ModalSheet } from './shared/ModalSheet';
 
-interface SettingsModalProps {
+/** Props accepted by {@link SettingsModal}. */
+export interface SettingsModalProps {
   visible: boolean;
   theme: AppTheme;
   preferences: AppPreferences;
@@ -42,6 +38,13 @@ const LANGUAGES: AppLanguage[] = ['es', 'en'];
 const CURRENCIES: CurrencyCode[] = ['EUR', 'USD'];
 const THEME_IDS = Object.keys(THEME_REGISTRY) as ThemeId[];
 
+/**
+ * Modal sheet letting users switch app + card-name language, theme palette,
+ * display currency, and offline EUR→USD conversion rate.
+ *
+ * @param props Modal visibility, active theme, current preferences, update callback, and close callback.
+ * @returns Settings bottom-sheet modal element.
+ */
 export function SettingsModal({
   visible,
   theme,
@@ -49,7 +52,6 @@ export function SettingsModal({
   onChangePreferences,
   onClose,
 }: SettingsModalProps) {
-  const insets = useSafeAreaInsets();
   const t = getTranslations(preferences.language);
 
   const [rateText, setRateText] = useState(() =>
@@ -108,324 +110,212 @@ export function SettingsModal({
   }
 
   return (
-    <Modal
+    <ModalSheet
       visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <KeyboardAvoidingView
-        style={[styles.overlay, { backgroundColor: theme.backdrop }]}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <Pressable style={styles.backdropTap} onPress={onClose} />
-
-        <View
-          style={[
-            styles.sheet,
-            CARD_SHADOW_STYLE,
-            {
-              backgroundColor: theme.surface,
-              borderColor: theme.border,
-              paddingBottom: Math.max(16, insets.bottom + 12),
-            },
-          ]}
-        >
-          {/* Sheet Header */}
-          <View style={[styles.header, { borderBottomColor: theme.divider }]}>
-            <View>
-              <Text style={[styles.headerEyebrow, { color: theme.muted }]}>
-                {t.settings.eyebrow}
-              </Text>
-              <Text style={[styles.headerTitle, { color: theme.text }]}>
-                {t.settings.title}
-              </Text>
-            </View>
-            <Pressable
-              onPress={onClose}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel={t.common.close}
-              style={({ pressed }) => [
-                styles.closeBtn,
-                {
-                  backgroundColor: theme.surfaceSubtle,
-                  opacity: pressed ? 0.7 : 1,
-                },
-              ]}
-            >
-              <Text style={[styles.closeBtnText, { color: theme.muted }]}>
-                ✕
-              </Text>
-            </Pressable>
-          </View>
-
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.body}
+      onClose={onClose}
+      eyebrow={t.settings.eyebrow}
+      title={t.settings.title}
+      closeAccessibilityLabel={t.common.close}
+      maxHeight="85%"
+      theme={theme}
+      footer={
+        <View style={styles.footerRow}>
+          <Pressable
+            onPress={onClose}
+            style={({ pressed }) => [
+              styles.doneBtn,
+              {
+                backgroundColor: theme.accent,
+                opacity: pressed ? 0.8 : 1,
+              },
+            ]}
           >
-            {/* 1. Language */}
-            <View
-              style={[
-                styles.sectionCard,
-                { backgroundColor: theme.bg, borderColor: theme.border },
-              ]}
-            >
-              <Text style={[styles.sectionTitle, { color: theme.text }]}>
-                {t.settings.languageTitle}
-              </Text>
-              <Text style={[styles.sectionSubtitle, { color: theme.muted }]}>
-                {t.settings.languageSubtitle}
-              </Text>
-              <View style={styles.optionRow}>
-                {LANGUAGES.map((lang) => {
-                  const selected = preferences.language === lang;
-                  return (
-                    <Pressable
-                      key={lang}
-                      onPress={() => handleSelectLanguage(lang)}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      style={({ pressed }) => [
-                        styles.optionPill,
-                        {
-                          backgroundColor: selected
-                            ? theme.accent
-                            : theme.surface,
-                          borderColor: selected ? theme.accent : theme.border,
-                          opacity: pressed ? 0.8 : 1,
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.optionPillText,
-                          {
-                            color: selected ? theme.accentText : theme.text,
-                          },
-                        ]}
-                      >
-                        {t.settings.languages[lang]}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-
-            {/* 2. Theme (extensible from THEME_REGISTRY) */}
-            <View
-              style={[
-                styles.sectionCard,
-                { backgroundColor: theme.bg, borderColor: theme.border },
-              ]}
-            >
-              <Text style={[styles.sectionTitle, { color: theme.text }]}>
-                {t.settings.themeTitle}
-              </Text>
-              <Text style={[styles.sectionSubtitle, { color: theme.muted }]}>
-                {t.settings.themeSubtitle}
-              </Text>
-              <View style={styles.optionRow}>
-                {THEME_IDS.map((themeId) => {
-                  const selected = preferences.themeId === themeId;
-                  const swatchTheme = THEME_REGISTRY[themeId];
-                  return (
-                    <Pressable
-                      key={themeId}
-                      onPress={() => handleSelectTheme(themeId)}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      style={({ pressed }) => [
-                        styles.optionPill,
-                        {
-                          backgroundColor: selected
-                            ? theme.accent
-                            : theme.surface,
-                          borderColor: selected ? theme.accent : theme.border,
-                          opacity: pressed ? 0.8 : 1,
-                        },
-                      ]}
-                    >
-                      <View style={styles.themeSwatchRow}>
-                        <View
-                          style={[
-                            styles.themeSwatch,
-                            {
-                              backgroundColor: swatchTheme.bg,
-                              borderColor: swatchTheme.accent,
-                            },
-                          ]}
-                        />
-                        <Text
-                          style={[
-                            styles.optionPillText,
-                            {
-                              color: selected ? theme.accentText : theme.text,
-                            },
-                          ]}
-                        >
-                          {t.settings.themes[themeId]}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-
-            {/* 3. Currency */}
-            <View
-              style={[
-                styles.sectionCard,
-                { backgroundColor: theme.bg, borderColor: theme.border },
-              ]}
-            >
-              <Text style={[styles.sectionTitle, { color: theme.text }]}>
-                {t.settings.currencyTitle}
-              </Text>
-              <Text style={[styles.sectionSubtitle, { color: theme.muted }]}>
-                {t.settings.currencySubtitle}
-              </Text>
-              <View style={styles.optionRow}>
-                {CURRENCIES.map((curr) => {
-                  const selected = preferences.currency === curr;
-                  return (
-                    <Pressable
-                      key={curr}
-                      onPress={() => handleSelectCurrency(curr)}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      style={({ pressed }) => [
-                        styles.optionPill,
-                        {
-                          backgroundColor: selected
-                            ? theme.accent
-                            : theme.surface,
-                          borderColor: selected ? theme.accent : theme.border,
-                          opacity: pressed ? 0.8 : 1,
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.optionPillText,
-                          {
-                            color: selected ? theme.accentText : theme.text,
-                          },
-                        ]}
-                      >
-                        {t.settings.currencies[curr]}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-
-              {preferences.currency === 'USD' ? (
-                <View
-                  style={[styles.rateBox, { borderTopColor: theme.divider }]}
+            <Text style={[styles.doneBtnText, { color: theme.accentText }]}>
+              {t.common.close}
+            </Text>
+          </Pressable>
+        </View>
+      }
+    >
+      {/* 1. Language */}
+      <View
+        style={[
+          styles.sectionCard,
+          { backgroundColor: theme.bg, borderColor: theme.border },
+        ]}
+      >
+        <Text style={[styles.sectionTitle, { color: theme.text }]}>
+          {t.settings.languageTitle}
+        </Text>
+        <Text style={[styles.sectionSubtitle, { color: theme.muted }]}>
+          {t.settings.languageSubtitle}
+        </Text>
+        <View style={styles.optionRow}>
+          {LANGUAGES.map((lang) => {
+            const selected = preferences.language === lang;
+            return (
+              <Pressable
+                key={lang}
+                onPress={() => handleSelectLanguage(lang)}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                style={({ pressed }) => [
+                  styles.optionPill,
+                  {
+                    backgroundColor: selected ? theme.accent : theme.surface,
+                    borderColor: selected ? theme.accent : theme.border,
+                    opacity: pressed ? 0.8 : 1,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.optionPillText,
+                    { color: selected ? theme.accentText : theme.text },
+                  ]}
                 >
-                  <View style={styles.rateTextBlock}>
-                    <Text style={[styles.rateLabel, { color: theme.text }]}>
-                      {t.settings.rateLabel}
-                    </Text>
-                    <Text style={[styles.rateHint, { color: theme.muted }]}>
-                      {t.settings.rateHint}
-                    </Text>
-                  </View>
-                  <TextInput
-                    value={rateText}
-                    onChangeText={handleChangeRate}
-                    onBlur={handleBlurRate}
-                    keyboardType="decimal-pad"
+                  {t.settings.languages[lang]}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
+      {/* 2. Theme (extensible from THEME_REGISTRY) */}
+      <View
+        style={[
+          styles.sectionCard,
+          { backgroundColor: theme.bg, borderColor: theme.border },
+        ]}
+      >
+        <Text style={[styles.sectionTitle, { color: theme.text }]}>
+          {t.settings.themeTitle}
+        </Text>
+        <Text style={[styles.sectionSubtitle, { color: theme.muted }]}>
+          {t.settings.themeSubtitle}
+        </Text>
+        <View style={styles.optionRow}>
+          {THEME_IDS.map((themeId) => {
+            const selected = preferences.themeId === themeId;
+            const swatchTheme = THEME_REGISTRY[themeId];
+            return (
+              <Pressable
+                key={themeId}
+                onPress={() => handleSelectTheme(themeId)}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                style={({ pressed }) => [
+                  styles.optionPill,
+                  {
+                    backgroundColor: selected ? theme.accent : theme.surface,
+                    borderColor: selected ? theme.accent : theme.border,
+                    opacity: pressed ? 0.8 : 1,
+                  },
+                ]}
+              >
+                <View style={styles.themeSwatchRow}>
+                  <View
                     style={[
-                      styles.rateInput,
-                      TABULAR_NUMS_STYLE,
+                      styles.themeSwatch,
                       {
-                        backgroundColor: theme.surface,
-                        borderColor: theme.border,
-                        color: theme.text,
+                        backgroundColor: swatchTheme.bg,
+                        borderColor: swatchTheme.accent,
                       },
                     ]}
                   />
+                  <Text
+                    style={[
+                      styles.optionPillText,
+                      { color: selected ? theme.accentText : theme.text },
+                    ]}
+                  >
+                    {t.settings.themes[themeId]}
+                  </Text>
                 </View>
-              ) : null}
-            </View>
-          </ScrollView>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
 
-          <View style={[styles.footer, { borderTopColor: theme.divider }]}>
-            <Pressable
-              onPress={onClose}
-              style={({ pressed }) => [
-                styles.doneBtn,
+      {/* 3. Currency */}
+      <View
+        style={[
+          styles.sectionCard,
+          { backgroundColor: theme.bg, borderColor: theme.border },
+        ]}
+      >
+        <Text style={[styles.sectionTitle, { color: theme.text }]}>
+          {t.settings.currencyTitle}
+        </Text>
+        <Text style={[styles.sectionSubtitle, { color: theme.muted }]}>
+          {t.settings.currencySubtitle}
+        </Text>
+        <View style={styles.optionRow}>
+          {CURRENCIES.map((curr) => {
+            const selected = preferences.currency === curr;
+            return (
+              <Pressable
+                key={curr}
+                onPress={() => handleSelectCurrency(curr)}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                style={({ pressed }) => [
+                  styles.optionPill,
+                  {
+                    backgroundColor: selected ? theme.accent : theme.surface,
+                    borderColor: selected ? theme.accent : theme.border,
+                    opacity: pressed ? 0.8 : 1,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.optionPillText,
+                    { color: selected ? theme.accentText : theme.text },
+                  ]}
+                >
+                  {t.settings.currencies[curr]}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {preferences.currency === 'USD' ? (
+          <View style={[styles.rateBox, { borderTopColor: theme.divider }]}>
+            <View style={styles.rateTextBlock}>
+              <Text style={[styles.rateLabel, { color: theme.text }]}>
+                {t.settings.rateLabel}
+              </Text>
+              <Text style={[styles.rateHint, { color: theme.muted }]}>
+                {t.settings.rateHint}
+              </Text>
+            </View>
+            <TextInput
+              value={rateText}
+              onChangeText={handleChangeRate}
+              onBlur={handleBlurRate}
+              keyboardType="decimal-pad"
+              style={[
+                styles.rateInput,
+                TABULAR_NUMS_STYLE,
                 {
-                  backgroundColor: theme.accent,
-                  opacity: pressed ? 0.8 : 1,
+                  backgroundColor: theme.surface,
+                  borderColor: theme.border,
+                  color: theme.text,
                 },
               ]}
-            >
-              <Text style={[styles.doneBtnText, { color: theme.accentText }]}>
-                {t.common.close}
-              </Text>
-            </Pressable>
+            />
           </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+        ) : null}
+      </View>
+    </ModalSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  backdropTap: {
-    flex: 1,
-  },
-  sheet: {
-    maxHeight: '85%',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    overflow: 'hidden',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  headerEyebrow: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-  },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    marginTop: 1,
-  },
-  closeBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  closeBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  body: {
-    padding: 18,
-    gap: 12,
-  },
   sectionCard: {
     borderRadius: 16,
     borderWidth: 1,
@@ -501,10 +391,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
-  footer: {
-    paddingHorizontal: 18,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
+  footerRow: {
     alignItems: 'flex-end',
   },
   doneBtn: {
@@ -517,4 +404,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-

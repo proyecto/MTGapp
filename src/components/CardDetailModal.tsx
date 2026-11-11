@@ -1,32 +1,26 @@
+/**
+ * @module components/CardDetailModal
+ * Slide-up card inspector presenting valuation KPIs, interactive price evolution curves,
+ * multi-store price comparison, grouped metadata, and inline edit/delete workflows.
+ */
+
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getCardPriceHistory } from '../db/cardsRepository';
 import { getTranslations } from '../i18n/translations';
+import { TABULAR_NUMS_STYLE, type AppTheme } from '../theme/tokens';
 import {
-  CARD_SHADOW_STYLE,
-  TABULAR_NUMS_STYLE,
-  type AppTheme,
-} from '../theme/tokens';
-import {
-  CARD_CONDITIONS,
-  CARD_LANGUAGES,
   CONDITION_NAMES,
   PRICE_SOURCES,
   type AppPreferences,
-  type CardCondition,
   type CardHolding,
   type CardPriceHistoryMap,
   type HistoryRange,
@@ -40,22 +34,36 @@ import {
   formatSignedPct,
   getCardPrimaryName,
   getCardSecondaryName,
-  parseDecimalInput,
-  parseIntInput,
 } from '../utils/cardMath';
 import { PriceEvolutionChart } from './PriceEvolutionChart';
+import {
+  buildCardPayload,
+  CardFormFields,
+  createCardFormValues,
+  type CardFormValues,
+} from './shared/CardFormFields';
+import { ModalSheet } from './shared/ModalSheet';
 
-interface CardDetailModalProps {
+/** Props accepted by {@link CardDetailModal}. */
+export interface CardDetailModalProps {
+  /** Selected card holding, or `null` when closed. */
   card: CardHolding | null;
   visible: boolean;
   theme: AppTheme;
   preferences: AppPreferences;
+  /** Optional preloaded price history map keyed by store. */
   historyMapProp?: CardPriceHistoryMap;
   onClose: () => void;
   onUpdate: (id: string, patch: UpdateCardInput) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
 
+/**
+ * Full-detail inspector & editor modal for an existing {@link CardHolding}.
+ *
+ * @param props Selected card, preloaded history, update/delete handlers, theme, and preferences.
+ * @returns Slide-up modal sheet or `null` when no card is selected.
+ */
 export function CardDetailModal({
   card,
   visible,
@@ -66,9 +74,7 @@ export function CardDetailModal({
   onUpdate,
   onDelete,
 }: CardDetailModalProps) {
-  const insets = useSafeAreaInsets();
   const t = getTranslations(preferences.language);
-  const isEn = preferences.language === 'en';
 
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -77,35 +83,9 @@ export function CardDetailModal({
   const [selectedSource, setSelectedSource] =
     useState<PriceSource>('Cardmarket');
   const [historyRange, setHistoryRange] = useState<HistoryRange>('all');
-
-  const [nameEs, setNameEs] = useState(() => card?.nameEs ?? '');
-  const [nameEn, setNameEn] = useState(() => card?.nameEn ?? '');
-  const [setCode, setSetCode] = useState(() => card?.setCode ?? '');
-  const [setName, setSetName] = useState(() => card?.setName ?? '');
-  const [collectorNumber, setCollectorNumber] = useState(
-    () => card?.collectorNumber ?? '',
+  const [formValues, setFormValues] = useState<CardFormValues>(() =>
+    createCardFormValues(card, preferences.language),
   );
-  const [condition, setCondition] = useState<CardCondition>(
-    () => card?.condition ?? 'EX',
-  );
-  const [language, setLanguage] = useState(() => card?.language ?? 'en');
-  const [quantityText, setQuantityText] = useState(
-    () => String(card?.quantity ?? 1),
-  );
-  const [unitCostText, setUnitCostText] = useState(
-    () => String(card?.unitCostEur ?? 0).replace('.', ','),
-  );
-  const [shippingText, setShippingText] = useState(
-    () => String(card?.shippingEur ?? 0).replace('.', ','),
-  );
-  const [marketPriceText, setMarketPriceText] = useState(
-    () => String(card?.marketPriceEur ?? 0).replace('.', ','),
-  );
-  const [purchaseDate, setPurchaseDate] = useState(
-    () => card?.purchaseDate ?? '',
-  );
-  const [orderId, setOrderId] = useState(() => card?.orderId ?? '');
-  const [deck, setDeck] = useState(() => card?.deck ?? '');
   const [errorText, setErrorText] = useState<string | null>(null);
 
   useEffect(() => {
@@ -134,40 +114,16 @@ export function CardDetailModal({
     return null;
   }
 
-  const historyMap: CardPriceHistoryMap | null =
-    historyMapProp !== undefined ? historyMapProp : fetchedHistoryMap;
-
-  const primaryName = getCardPrimaryName(card, preferences.language);
-  const secondaryName = getCardSecondaryName(card, preferences.language);
+  function updateForm(patch: Partial<CardFormValues>) {
+    setFormValues((prev) => ({ ...prev, ...patch }));
+  }
 
   function handleStartEdit() {
     if (!card) return;
     setErrorText(null);
-    setNameEs(card.nameEs);
-    setNameEn(card.nameEn);
-    setSetCode(card.setCode);
-    setSetName(card.setName);
-    setCollectorNumber(card.collectorNumber);
-    setCondition(card.condition);
-    setLanguage(card.language);
-    setQuantityText(String(card.quantity));
-    const decimalSep = isEn ? '.' : ',';
-    setUnitCostText(String(card.unitCostEur).replace('.', decimalSep));
-    setShippingText(String(card.shippingEur).replace('.', decimalSep));
-    setMarketPriceText(String(card.marketPriceEur).replace('.', decimalSep));
-    setPurchaseDate(card.purchaseDate);
-    setOrderId(card.orderId ?? '');
-    setDeck(card.deck ?? '');
+    setFormValues(createCardFormValues(card, preferences.language));
     setIsEditing(true);
   }
-
-  const metrics = computeCardMetrics(card);
-  const profitColor =
-    metrics.profit === 0
-      ? theme.muted
-      : metrics.profit > 0
-        ? theme.gain
-        : theme.loss;
 
   async function executeDelete(targetId: string) {
     setSaving(true);
@@ -207,10 +163,8 @@ export function CardDetailModal({
 
   async function handleSaveEdit() {
     if (!card) return;
-    const cleanNameEs = nameEs.trim();
-    const cleanNameEn = nameEn.trim();
-    const cleanSet = setCode.trim().toUpperCase();
-    if ((!cleanNameEs && !cleanNameEn) || !cleanSet) {
+    const payload = buildCardPayload(formValues, card);
+    if (!payload) {
       setErrorText(t.detail.errMissingRequired);
       return;
     }
@@ -218,22 +172,7 @@ export function CardDetailModal({
     setErrorText(null);
     setSaving(true);
     try {
-      await onUpdate(card.id, {
-        nameEs: cleanNameEs || cleanNameEn,
-        nameEn: cleanNameEn || cleanNameEs,
-        setCode: cleanSet,
-        setName: setName.trim(),
-        collectorNumber: collectorNumber.trim(),
-        condition,
-        language,
-        quantity: parseIntInput(quantityText, card.quantity),
-        unitCostEur: parseDecimalInput(unitCostText, card.unitCostEur),
-        shippingEur: parseDecimalInput(shippingText, card.shippingEur),
-        marketPriceEur: parseDecimalInput(marketPriceText, card.marketPriceEur),
-        purchaseDate: purchaseDate.trim() || card.purchaseDate,
-        orderId: orderId.trim() || null,
-        deck: deck.trim() || null,
-      });
+      await onUpdate(card.id, payload);
       setIsEditing(false);
     } catch {
       setErrorText(t.detail.errUpdate);
@@ -242,16 +181,22 @@ export function CardDetailModal({
     }
   }
 
+  const historyMap: CardPriceHistoryMap | null =
+    historyMapProp !== undefined ? historyMapProp : fetchedHistoryMap;
+  const primaryName = getCardPrimaryName(card, preferences.language);
+  const secondaryName = getCardSecondaryName(card, preferences.language);
+  const metrics = computeCardMetrics(card);
+  const profitColor =
+    metrics.profit === 0
+      ? theme.muted
+      : metrics.profit > 0
+        ? theme.gain
+        : theme.loss;
+
   const subtitleParts: string[] = [];
-  if (secondaryName) {
-    subtitleParts.push(secondaryName);
-  }
-  if (card.setName) {
-    subtitleParts.push(card.setName);
-  }
-  if (card.collectorNumber) {
-    subtitleParts.push(`#${card.collectorNumber}`);
-  }
+  if (secondaryName) subtitleParts.push(secondaryName);
+  if (card.setName) subtitleParts.push(card.setName);
+  if (card.collectorNumber) subtitleParts.push(`#${card.collectorNumber}`);
 
   const activePoints =
     historyMap?.[selectedSource] ?? historyMap?.Cardmarket ?? [];
@@ -263,789 +208,376 @@ export function CardDetailModal({
     : 0;
 
   return (
-    <Modal
+    <ModalSheet
       visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={() => {
-        if (isEditing) {
-          setIsEditing(false);
-        } else {
-          onClose();
-        }
-      }}
-    >
-      <KeyboardAvoidingView
-        style={[styles.overlay, { backgroundColor: theme.backdrop }]}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <Pressable style={styles.backdropTap} onPress={onClose} />
-
+      onClose={onClose}
+      onRequestClose={() => (isEditing ? setIsEditing(false) : onClose())}
+      title={primaryName}
+      subtitle={subtitleParts.length > 0 ? subtitleParts.join(' · ') : undefined}
+      titleBadge={
         <View
-          style={[
-            styles.sheet,
-            CARD_SHADOW_STYLE,
-            {
-              backgroundColor: theme.surface,
-              borderColor: theme.border,
-              paddingBottom: Math.max(16, insets.bottom + 12),
-            },
-          ]}
+          style={[styles.setPill, { backgroundColor: theme.surfaceSubtle }]}
         >
-          {/* Sheet Header */}
-          <View style={[styles.header, { borderBottomColor: theme.divider }]}>
-            <View style={styles.headerLeft}>
-              <View style={styles.headerTitleRow}>
-                <View
-                  style={[
-                    styles.setPill,
-                    { backgroundColor: theme.surfaceSubtle },
-                  ]}
-                >
-                  <Text
-                    style={[styles.setPillText, { color: theme.textSecondary }]}
-                  >
-                    {card.setCode}
-                  </Text>
-                </View>
-                <Text
-                  style={[styles.headerTitle, { color: theme.text }]}
-                  numberOfLines={2}
-                >
-                  {primaryName}
+          <Text style={[styles.setPillText, { color: theme.textSecondary }]}>
+            {card.setCode}
+          </Text>
+        </View>
+      }
+      closeAccessibilityLabel={t.common.close}
+      contentGap={isEditing ? 12 : 14}
+      theme={theme}
+      footer={
+        <View style={styles.footerRow}>
+          {!isEditing ? (
+            <>
+              <Pressable
+                onPress={handleConfirmDelete}
+                disabled={saving}
+                style={({ pressed }) => [
+                  styles.actionBtn,
+                  {
+                    backgroundColor: theme.lossBg,
+                    opacity: pressed ? 0.75 : 1,
+                  },
+                ]}
+              >
+                <Text style={[styles.actionBtnText, { color: theme.loss }]}>
+                  {t.common.delete}
                 </Text>
-              </View>
-              {subtitleParts.length > 0 ? (
-                <Text style={[styles.headerSubtitle, { color: theme.muted }]}>
-                  {subtitleParts.join(' · ')}
-                </Text>
-              ) : null}
-            </View>
+              </Pressable>
 
-            <Pressable
-              onPress={onClose}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel={t.common.close}
-              style={({ pressed }) => [
-                styles.closeBtn,
-                {
-                  backgroundColor: theme.surfaceSubtle,
-                  opacity: pressed ? 0.7 : 1,
-                },
-              ]}
-            >
-              <Text style={[styles.closeBtnText, { color: theme.muted }]}>
-                ✕
-              </Text>
-            </Pressable>
-          </View>
-
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.body}
-          >
-            {!isEditing ? (
-              <>
-                {/* Hero Valuation Strip */}
-                <View
-                  style={[
-                    styles.kpiStrip,
-                    {
-                      backgroundColor: theme.surfaceSubtle,
-                      borderColor: theme.border,
-                    },
-                  ]}
-                >
-                  <View style={styles.kpiCell}>
-                    <Text style={[styles.kpiLabel, { color: theme.muted }]}>
-                      {t.detail.currentValue}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.kpiValue,
-                        TABULAR_NUMS_STYLE,
-                        { color: theme.text },
-                      ]}
-                    >
-                      {formatMoney(metrics.totalMarket, preferences)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.kpiCell}>
-                    <Text style={[styles.kpiLabel, { color: theme.muted }]}>
-                      {t.detail.investment}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.kpiValue,
-                        TABULAR_NUMS_STYLE,
-                        { color: theme.text },
-                      ]}
-                    >
-                      {formatMoney(metrics.totalCost, preferences)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.kpiCell}>
-                    <Text style={[styles.kpiLabel, { color: theme.muted }]}>
-                      {t.detail.profit}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.kpiValue,
-                        TABULAR_NUMS_STYLE,
-                        { color: profitColor },
-                      ]}
-                    >
-                      {formatSignedMoney(metrics.profit, preferences)}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.kpiSub,
-                        TABULAR_NUMS_STYLE,
-                        { color: profitColor },
-                      ]}
-                    >
-                      {formatSignedPct(metrics.roiPct, preferences.language)}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Price Evolution Chart */}
-                {historyMap === null ? (
-                  <View
-                    style={[
-                      styles.chartLoadingCard,
-                      {
-                        backgroundColor: theme.bg,
-                        borderColor: theme.border,
-                      },
-                    ]}
-                  >
-                    <ActivityIndicator size="small" color={theme.accent} />
-                  </View>
-                ) : (
-                  <PriceEvolutionChart
-                    points={activePoints}
-                    source={activeSourceLabel}
-                    range={historyRange}
-                    onChangeRange={setHistoryRange}
-                    unitCostEur={card.unitCostEur}
-                    theme={theme}
-                    preferences={preferences}
-                  />
-                )}
-
-                {/* Multi-store comparison */}
-                {availableStoreCount > 1 && historyMap ? (
-                  <View
-                    style={[
-                      styles.detailCard,
-                      {
-                        backgroundColor: theme.bg,
-                        borderColor: theme.border,
-                      },
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.storeSectionHeader,
-                        { borderBottomColor: theme.divider },
-                      ]}
-                    >
-                      <Text
-                        style={[styles.storeSectionTitle, { color: theme.text }]}
-                      >
-                        {t.detail.storePricesTitle}
-                      </Text>
-                      <Text
-                        style={[styles.storeSectionHint, { color: theme.muted }]}
-                      >
-                        {t.detail.storePricesHint}
-                      </Text>
-                    </View>
-                    {PRICE_SOURCES.map((sourceName, index) => {
-                      const pts = historyMap[sourceName];
-                      const latest =
-                        pts && pts.length > 0 ? pts[pts.length - 1] : null;
-                      const isSelected = activeSourceLabel === sourceName;
-                      const isLastStore = index === PRICE_SOURCES.length - 1;
-                      return (
-                        <Pressable
-                          key={sourceName}
-                          disabled={!latest}
-                          onPress={() => setSelectedSource(sourceName)}
-                          style={({ pressed }) => [
-                            styles.detailRow,
-                            !isLastStore && {
-                              borderBottomWidth: StyleSheet.hairlineWidth,
-                              borderBottomColor: theme.divider,
-                            },
-                            pressed &&
-                              latest && { backgroundColor: theme.surfaceSubtle },
-                          ]}
-                        >
-                          <View style={styles.storeLabelWrap}>
-                            <View
-                              style={[
-                                styles.storeDot,
-                                {
-                                  backgroundColor: isSelected
-                                    ? theme.accent
-                                    : theme.border,
-                                },
-                              ]}
-                            />
-                            <Text
-                              style={[
-                                styles.detailLabel,
-                                {
-                                  color: isSelected
-                                    ? theme.accent
-                                    : theme.muted,
-                                  fontWeight: isSelected ? '600' : '400',
-                                },
-                              ]}
-                            >
-                              {sourceName}
-                            </Text>
-                          </View>
-                          <Text
-                            style={[
-                              styles.detailValue,
-                              TABULAR_NUMS_STYLE,
-                              {
-                                color: latest
-                                  ? isSelected
-                                    ? theme.accent
-                                    : theme.text
-                                  : theme.muted,
-                              },
-                            ]}
-                          >
-                            {latest
-                              ? formatMoney(latest.price, preferences)
-                              : '—'}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                ) : null}
-
-                {/* Grouped Detail Metadata Rows */}
-                <View
-                  style={[
-                    styles.detailCard,
-                    {
-                      backgroundColor: theme.bg,
-                      borderColor: theme.border,
-                    },
-                  ]}
-                >
-                  <DetailRow
-                    label={t.detail.condition}
-                    value={`${card.condition} · ${CONDITION_NAMES[card.condition]}`}
-                    theme={theme}
-                  />
-                  <DetailRow
-                    label={t.detail.language}
-                    value={card.language.toUpperCase()}
-                    theme={theme}
-                  />
-                  <DetailRow
-                    label={t.detail.quantity}
-                    value={`${card.quantity} ${card.quantity === 1 ? t.common.copySingular : t.common.copyPlural}`}
-                    theme={theme}
-                    tabular
-                  />
-                  <DetailRow
-                    label={t.detail.unitCost}
-                    value={formatMoney(card.unitCostEur, preferences)}
-                    theme={theme}
-                    tabular
-                  />
-                  <DetailRow
-                    label={t.detail.shipping}
-                    value={formatMoney(card.shippingEur, preferences)}
-                    theme={theme}
-                    tabular
-                  />
-                  <DetailRow
-                    label={t.detail.marketUnit}
-                    value={formatMoney(card.marketPriceEur, preferences)}
-                    theme={theme}
-                    tabular
-                  />
-                  <DetailRow
-                    label={t.detail.purchaseDate}
-                    value={card.purchaseDate || '—'}
-                    theme={theme}
-                    tabular
-                  />
-                  <DetailRow
-                    label={t.detail.orderId}
-                    value={card.orderId ?? '—'}
-                    theme={theme}
-                    tabular
-                  />
-                  <DetailRow
-                    label={t.detail.deck}
-                    value={card.deck ?? '—'}
-                    theme={theme}
-                  />
-                  <DetailRow
-                    label={t.detail.cardId}
-                    value={card.id}
-                    theme={theme}
-                    tabular
-                    isLast
-                  />
-                </View>
-
-                {errorText ? (
-                  <Text style={[styles.errorText, { color: theme.loss }]}>
-                    {errorText}
-                  </Text>
-                ) : null}
-              </>
-            ) : (
-              /* Edit Form */
-              <View style={styles.editForm}>
-                <View style={styles.fieldGroup}>
-                  <Text style={[styles.label, { color: theme.muted }]}>
-                    {t.detail.nameEsEdit}
-                  </Text>
-                  <TextInput
-                    value={nameEs}
-                    onChangeText={setNameEs}
-                    style={[
-                      styles.input,
-                      {
-                        backgroundColor: theme.bg,
-                        borderColor: theme.border,
-                        color: theme.text,
-                      },
-                    ]}
-                  />
-                </View>
-
-                <View style={styles.fieldGroup}>
-                  <Text style={[styles.label, { color: theme.muted }]}>
-                    {t.detail.nameEnEdit}
-                  </Text>
-                  <TextInput
-                    value={nameEn}
-                    onChangeText={setNameEn}
-                    style={[
-                      styles.input,
-                      {
-                        backgroundColor: theme.bg,
-                        borderColor: theme.border,
-                        color: theme.text,
-                      },
-                    ]}
-                  />
-                </View>
-
-                <View style={styles.row2}>
-                  <View style={[styles.fieldGroup, styles.colHalf]}>
-                    <Text style={[styles.label, { color: theme.muted }]}>
-                      {t.detail.setCodeEdit}
-                    </Text>
-                    <TextInput
-                      value={setCode}
-                      onChangeText={setSetCode}
-                      autoCapitalize="characters"
-                      style={[
-                        styles.input,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.border,
-                          color: theme.text,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <View style={[styles.fieldGroup, styles.colHalf]}>
-                    <Text style={[styles.label, { color: theme.muted }]}>
-                      {t.quickAdd.collectorLabel}
-                    </Text>
-                    <TextInput
-                      value={collectorNumber}
-                      onChangeText={setCollectorNumber}
-                      style={[
-                        styles.input,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.border,
-                          color: theme.text,
-                        },
-                      ]}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.fieldGroup}>
-                  <Text style={[styles.label, { color: theme.muted }]}>
-                    {t.detail.setNameEdit}
-                  </Text>
-                  <TextInput
-                    value={setName}
-                    onChangeText={setSetName}
-                    style={[
-                      styles.input,
-                      {
-                        backgroundColor: theme.bg,
-                        borderColor: theme.border,
-                        color: theme.text,
-                      },
-                    ]}
-                  />
-                </View>
-
-                <View style={styles.fieldGroup}>
-                  <Text style={[styles.label, { color: theme.muted }]}>
-                    {t.detail.condition}
-                  </Text>
-                  <View style={styles.chipWrap}>
-                    {CARD_CONDITIONS.map((cond) => {
-                      const selected = condition === cond;
-                      return (
-                        <Pressable
-                          key={cond}
-                          onPress={() => setCondition(cond)}
-                          style={[
-                            styles.chip,
-                            {
-                              backgroundColor: selected
-                                ? theme.accent
-                                : theme.bg,
-                              borderColor: selected
-                                ? theme.accent
-                                : theme.border,
-                            },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.chipText,
-                              {
-                                color: selected
-                                  ? theme.accentText
-                                  : theme.textSecondary,
-                              },
-                            ]}
-                          >
-                            {cond}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                </View>
-
-                <View style={styles.fieldGroup}>
-                  <Text style={[styles.label, { color: theme.muted }]}>
-                    {t.detail.language}
-                  </Text>
-                  <View style={styles.chipWrap}>
-                    {CARD_LANGUAGES.map((lang) => {
-                      const selected = language === lang;
-                      return (
-                        <Pressable
-                          key={lang}
-                          onPress={() => setLanguage(lang)}
-                          style={[
-                            styles.chip,
-                            {
-                              backgroundColor: selected
-                                ? theme.accent
-                                : theme.bg,
-                              borderColor: selected
-                                ? theme.accent
-                                : theme.border,
-                            },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.chipText,
-                              {
-                                color: selected
-                                  ? theme.accentText
-                                  : theme.textSecondary,
-                              },
-                            ]}
-                          >
-                            {lang.toUpperCase()}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                </View>
-
-                <View style={styles.row2}>
-                  <View style={[styles.fieldGroup, styles.colHalf]}>
-                    <Text style={[styles.label, { color: theme.muted }]}>
-                      {t.quickAdd.quantityLabel}
-                    </Text>
-                    <TextInput
-                      value={quantityText}
-                      onChangeText={setQuantityText}
-                      keyboardType="number-pad"
-                      style={[
-                        styles.input,
-                        TABULAR_NUMS_STYLE,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.border,
-                          color: theme.text,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <View style={[styles.fieldGroup, styles.colHalf]}>
-                    <Text style={[styles.label, { color: theme.muted }]}>
-                      {t.quickAdd.unitCostLabel}
-                    </Text>
-                    <TextInput
-                      value={unitCostText}
-                      onChangeText={setUnitCostText}
-                      keyboardType="decimal-pad"
-                      style={[
-                        styles.input,
-                        TABULAR_NUMS_STYLE,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.border,
-                          color: theme.text,
-                        },
-                      ]}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.row2}>
-                  <View style={[styles.fieldGroup, styles.colHalf]}>
-                    <Text style={[styles.label, { color: theme.muted }]}>
-                      {t.quickAdd.shippingLabel}
-                    </Text>
-                    <TextInput
-                      value={shippingText}
-                      onChangeText={setShippingText}
-                      keyboardType="decimal-pad"
-                      style={[
-                        styles.input,
-                        TABULAR_NUMS_STYLE,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.border,
-                          color: theme.text,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <View style={[styles.fieldGroup, styles.colHalf]}>
-                    <Text style={[styles.label, { color: theme.muted }]}>
-                      {t.quickAdd.marketPriceLabel}
-                    </Text>
-                    <TextInput
-                      value={marketPriceText}
-                      onChangeText={setMarketPriceText}
-                      keyboardType="decimal-pad"
-                      style={[
-                        styles.input,
-                        TABULAR_NUMS_STYLE,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.border,
-                          color: theme.text,
-                        },
-                      ]}
-                    />
-                  </View>
-                </View>
-
-                {preferences.currency === 'USD' ? (
-                  <Text style={[styles.hintText, { color: theme.muted }]}>
-                    {t.quickAdd.eurBaseHint}
-                  </Text>
-                ) : null}
-
-                <View style={styles.row2}>
-                  <View style={[styles.fieldGroup, styles.colHalf]}>
-                    <Text style={[styles.label, { color: theme.muted }]}>
-                      {t.detail.purchaseDate}
-                    </Text>
-                    <TextInput
-                      value={purchaseDate}
-                      onChangeText={setPurchaseDate}
-                      style={[
-                        styles.input,
-                        TABULAR_NUMS_STYLE,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.border,
-                          color: theme.text,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <View style={[styles.fieldGroup, styles.colHalf]}>
-                    <Text style={[styles.label, { color: theme.muted }]}>
-                      {t.detail.deck}
-                    </Text>
-                    <TextInput
-                      value={deck}
-                      onChangeText={setDeck}
-                      placeholder={t.detail.optional}
-                      placeholderTextColor={theme.muted}
-                      style={[
-                        styles.input,
-                        {
-                          backgroundColor: theme.bg,
-                          borderColor: theme.border,
-                          color: theme.text,
-                        },
-                      ]}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.fieldGroup}>
-                  <Text style={[styles.label, { color: theme.muted }]}>
-                    {t.detail.orderId}
-                  </Text>
-                  <TextInput
-                    value={orderId}
-                    onChangeText={setOrderId}
-                    placeholder={t.detail.optional}
-                    placeholderTextColor={theme.muted}
-                    style={[
-                      styles.input,
-                      TABULAR_NUMS_STYLE,
-                      {
-                        backgroundColor: theme.bg,
-                        borderColor: theme.border,
-                        color: theme.text,
-                      },
-                    ]}
-                  />
-                </View>
-
-                {errorText ? (
-                  <Text style={[styles.errorText, { color: theme.loss }]}>
-                    {errorText}
-                  </Text>
-                ) : null}
-              </View>
-            )}
-          </ScrollView>
-
-          {/* Footer Actions */}
-          <View style={[styles.footer, { borderTopColor: theme.divider }]}>
-            {!isEditing ? (
-              <>
+              <View style={styles.footerRight}>
                 <Pressable
-                  onPress={handleConfirmDelete}
+                  onPress={handleStartEdit}
                   disabled={saving}
                   style={({ pressed }) => [
                     styles.actionBtn,
                     {
-                      backgroundColor: theme.lossBg,
+                      backgroundColor: theme.accentSoft,
                       opacity: pressed ? 0.75 : 1,
                     },
                   ]}
                 >
-                  <Text style={[styles.actionBtnText, { color: theme.loss }]}>
-                    {t.common.delete}
+                  <Text style={[styles.actionBtnText, { color: theme.accent }]}>
+                    {t.common.edit}
                   </Text>
                 </Pressable>
 
-                <View style={styles.footerRight}>
-                  <Pressable
-                    onPress={handleStartEdit}
-                    disabled={saving}
-                    style={({ pressed }) => [
-                      styles.actionBtn,
-                      {
-                        backgroundColor: theme.accentSoft,
-                        opacity: pressed ? 0.75 : 1,
-                      },
-                    ]}
-                  >
-                    <Text style={[styles.actionBtnText, { color: theme.accent }]}>
-                      {t.common.edit}
-                    </Text>
-                  </Pressable>
+                <Pressable
+                  onPress={onClose}
+                  style={({ pressed }) => [
+                    styles.actionBtn,
+                    {
+                      backgroundColor: theme.surfaceSubtle,
+                      opacity: pressed ? 0.75 : 1,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.actionBtnText, { color: theme.text }]}>
+                    {t.common.close}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <>
+              <View />
+              <View style={styles.footerRight}>
+                <Pressable
+                  onPress={() => setIsEditing(false)}
+                  disabled={saving}
+                  style={({ pressed }) => [
+                    styles.actionBtn,
+                    {
+                      backgroundColor: theme.surfaceSubtle,
+                      opacity: pressed ? 0.75 : 1,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.actionBtnText, { color: theme.text }]}>
+                    {t.common.cancel}
+                  </Text>
+                </Pressable>
 
-                  <Pressable
-                    onPress={onClose}
-                    style={({ pressed }) => [
-                      styles.actionBtn,
-                      {
-                        backgroundColor: theme.surfaceSubtle,
-                        opacity: pressed ? 0.75 : 1,
-                      },
-                    ]}
+                <Pressable
+                  onPress={handleSaveEdit}
+                  disabled={saving}
+                  style={({ pressed }) => [
+                    styles.actionBtn,
+                    {
+                      backgroundColor: theme.accent,
+                      opacity: saving || pressed ? 0.8 : 1,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[styles.actionBtnText, { color: theme.accentText }]}
                   >
-                    <Text style={[styles.actionBtnText, { color: theme.text }]}>
-                      {t.common.close}
-                    </Text>
-                  </Pressable>
-                </View>
-              </>
-            ) : (
-              <>
-                <View />
-                <View style={styles.footerRight}>
-                  <Pressable
-                    onPress={() => setIsEditing(false)}
-                    disabled={saving}
-                    style={({ pressed }) => [
-                      styles.actionBtn,
-                      {
-                        backgroundColor: theme.surfaceSubtle,
-                        opacity: pressed ? 0.75 : 1,
-                      },
-                    ]}
-                  >
-                    <Text style={[styles.actionBtnText, { color: theme.text }]}>
-                      {t.common.cancel}
-                    </Text>
-                  </Pressable>
+                    {saving ? t.common.saving : t.common.save}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
+          )}
+        </View>
+      }
+    >
+      {!isEditing ? (
+        <>
+          <View
+            style={[
+              styles.kpiStrip,
+              {
+                backgroundColor: theme.surfaceSubtle,
+                borderColor: theme.border,
+              },
+            ]}
+          >
+            <View style={styles.kpiCell}>
+              <Text style={[styles.kpiLabel, { color: theme.muted }]}>
+                {t.detail.currentValue}
+              </Text>
+              <Text
+                style={[
+                  styles.kpiValue,
+                  TABULAR_NUMS_STYLE,
+                  { color: theme.text },
+                ]}
+              >
+                {formatMoney(metrics.totalMarket, preferences)}
+              </Text>
+            </View>
 
+            <View style={styles.kpiCell}>
+              <Text style={[styles.kpiLabel, { color: theme.muted }]}>
+                {t.detail.investment}
+              </Text>
+              <Text
+                style={[
+                  styles.kpiValue,
+                  TABULAR_NUMS_STYLE,
+                  { color: theme.text },
+                ]}
+              >
+                {formatMoney(metrics.totalCost, preferences)}
+              </Text>
+            </View>
+
+            <View style={styles.kpiCell}>
+              <Text style={[styles.kpiLabel, { color: theme.muted }]}>
+                {t.detail.profit}
+              </Text>
+              <Text
+                style={[
+                  styles.kpiValue,
+                  TABULAR_NUMS_STYLE,
+                  { color: profitColor },
+                ]}
+              >
+                {formatSignedMoney(metrics.profit, preferences)}
+              </Text>
+              <Text
+                style={[
+                  styles.kpiSub,
+                  TABULAR_NUMS_STYLE,
+                  { color: profitColor },
+                ]}
+              >
+                {formatSignedPct(metrics.roiPct, preferences.language)}
+              </Text>
+            </View>
+          </View>
+
+          {historyMap === null ? (
+            <View
+              style={[
+                styles.chartLoadingCard,
+                { backgroundColor: theme.bg, borderColor: theme.border },
+              ]}
+            >
+              <ActivityIndicator size="small" color={theme.accent} />
+            </View>
+          ) : (
+            <PriceEvolutionChart
+              points={activePoints}
+              source={activeSourceLabel}
+              range={historyRange}
+              onChangeRange={setHistoryRange}
+              unitCostEur={card.unitCostEur}
+              theme={theme}
+              preferences={preferences}
+            />
+          )}
+
+          {availableStoreCount > 1 && historyMap ? (
+            <View
+              style={[
+                styles.detailCard,
+                { backgroundColor: theme.bg, borderColor: theme.border },
+              ]}
+            >
+              <View
+                style={[
+                  styles.storeSectionHeader,
+                  { borderBottomColor: theme.divider },
+                ]}
+              >
+                <Text style={[styles.storeSectionTitle, { color: theme.text }]}>
+                  {t.detail.storePricesTitle}
+                </Text>
+                <Text style={[styles.storeSectionHint, { color: theme.muted }]}>
+                  {t.detail.storePricesHint}
+                </Text>
+              </View>
+              {PRICE_SOURCES.map((sourceName, index) => {
+                const pts = historyMap[sourceName];
+                const latest =
+                  pts && pts.length > 0 ? pts[pts.length - 1] : null;
+                const isSelected = activeSourceLabel === sourceName;
+                const isLastStore = index === PRICE_SOURCES.length - 1;
+                return (
                   <Pressable
-                    onPress={handleSaveEdit}
-                    disabled={saving}
+                    key={sourceName}
+                    disabled={!latest}
+                    onPress={() => setSelectedSource(sourceName)}
                     style={({ pressed }) => [
-                      styles.actionBtn,
-                      {
-                        backgroundColor: theme.accent,
-                        opacity: saving || pressed ? 0.8 : 1,
+                      styles.detailRow,
+                      !isLastStore && {
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        borderBottomColor: theme.divider,
                       },
+                      pressed &&
+                        latest && { backgroundColor: theme.surfaceSubtle },
                     ]}
                   >
+                    <View style={styles.storeLabelWrap}>
+                      <View
+                        style={[
+                          styles.storeDot,
+                          {
+                            backgroundColor: isSelected
+                              ? theme.accent
+                              : theme.border,
+                          },
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.detailLabel,
+                          {
+                            color: isSelected ? theme.accent : theme.muted,
+                            fontWeight: isSelected ? '600' : '400',
+                          },
+                        ]}
+                      >
+                        {sourceName}
+                      </Text>
+                    </View>
                     <Text
                       style={[
-                        styles.actionBtnText,
-                        { color: theme.accentText },
+                        styles.detailValue,
+                        TABULAR_NUMS_STYLE,
+                        {
+                          color: latest
+                            ? isSelected
+                              ? theme.accent
+                              : theme.text
+                            : theme.muted,
+                        },
                       ]}
                     >
-                      {saving ? t.common.saving : t.common.save}
+                      {latest ? formatMoney(latest.price, preferences) : '—'}
                     </Text>
                   </Pressable>
-                </View>
-              </>
-            )}
+                );
+              })}
+            </View>
+          ) : null}
+
+          <View
+            style={[
+              styles.detailCard,
+              { backgroundColor: theme.bg, borderColor: theme.border },
+            ]}
+          >
+            <DetailRow
+              label={t.detail.condition}
+              value={`${card.condition} · ${CONDITION_NAMES[card.condition]}`}
+              theme={theme}
+            />
+            <DetailRow
+              label={t.detail.language}
+              value={card.language.toUpperCase()}
+              theme={theme}
+            />
+            <DetailRow
+              label={t.detail.quantity}
+              value={`${card.quantity} ${card.quantity === 1 ? t.common.copySingular : t.common.copyPlural}`}
+              theme={theme}
+              tabular
+            />
+            <DetailRow
+              label={t.detail.unitCost}
+              value={formatMoney(card.unitCostEur, preferences)}
+              theme={theme}
+              tabular
+            />
+            <DetailRow
+              label={t.detail.shipping}
+              value={formatMoney(card.shippingEur, preferences)}
+              theme={theme}
+              tabular
+            />
+            <DetailRow
+              label={t.detail.marketUnit}
+              value={formatMoney(card.marketPriceEur, preferences)}
+              theme={theme}
+              tabular
+            />
+            <DetailRow
+              label={t.detail.purchaseDate}
+              value={card.purchaseDate || '—'}
+              theme={theme}
+              tabular
+            />
+            <DetailRow
+              label={t.detail.orderId}
+              value={card.orderId ?? '—'}
+              theme={theme}
+              tabular
+            />
+            <DetailRow
+              label={t.detail.deck}
+              value={card.deck ?? '—'}
+              theme={theme}
+            />
+            <DetailRow
+              label={t.detail.cardId}
+              value={card.id}
+              theme={theme}
+              tabular
+              isLast
+            />
           </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+        </>
+      ) : (
+        <CardFormFields
+          values={formValues}
+          onChange={updateForm}
+          mode="edit"
+          currency={preferences.currency}
+          uiLanguage={preferences.language}
+          t={t}
+          theme={theme}
+        />
+      )}
+
+      {errorText ? (
+        <Text style={[styles.errorText, { color: theme.loss }]}>
+          {errorText}
+        </Text>
+      ) : null}
+    </ModalSheet>
   );
 }
 
@@ -1083,39 +615,6 @@ function DetailRow({ label, value, theme, tabular, isLast }: DetailRowProps) {
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  backdropTap: {
-    flex: 1,
-  },
-  sheet: {
-    maxHeight: '88%',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    overflow: 'hidden',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 15,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  headerLeft: {
-    flex: 1,
-    gap: 4,
-  },
-  headerTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
   setPill: {
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -1124,30 +623,6 @@ const styles = StyleSheet.create({
   setPillText: {
     fontSize: 11,
     fontWeight: '700',
-  },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    flex: 1,
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    fontWeight: '400',
-  },
-  closeBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  closeBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  body: {
-    padding: 18,
-    gap: 14,
   },
   kpiStrip: {
     flexDirection: 'row',
@@ -1228,60 +703,14 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     textAlign: 'right',
   },
-  editForm: {
-    gap: 12,
-  },
-  fieldGroup: {
-    gap: 5,
-  },
-  row2: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  colHalf: {
-    flex: 1,
-  },
-  label: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  hintText: {
-    fontSize: 11,
-    fontStyle: 'italic',
-  },
-  input: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    fontSize: 14,
-  },
-  chipWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  chip: {
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 9,
-    borderWidth: 1,
-  },
-  chipText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
   errorText: {
     fontSize: 12,
     fontWeight: '600',
   },
-  footer: {
+  footerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
   },
   footerRight: {
     flexDirection: 'row',

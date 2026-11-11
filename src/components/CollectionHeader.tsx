@@ -1,3 +1,9 @@
+/**
+ * @module components/CollectionHeader
+ * Minimalist portfolio valuation header displaying market total, profit/ROI pill,
+ * and aggregate investment metadata above the card inventory list.
+ */
+
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { getTranslations } from '../i18n/translations';
@@ -9,7 +15,8 @@ import {
   formatSignedPct,
 } from '../utils/cardMath';
 
-interface CollectionHeaderProps {
+/** Props accepted by {@link CollectionHeader}. */
+export interface CollectionHeaderProps {
   summary: PortfolioSummary;
   filteredCount: number;
   isFiltered: boolean;
@@ -17,6 +24,12 @@ interface CollectionHeaderProps {
   preferences: AppPreferences;
 }
 
+/**
+ * Portfolio hero valuation summary strip pinned at the top of {@link CollectionScreen}.
+ *
+ * @param props Portfolio totals, filter state, active theme, and locale/FX preferences.
+ * @returns Hero summary header element.
+ */
 export function CollectionHeader({
   summary,
   filteredCount,

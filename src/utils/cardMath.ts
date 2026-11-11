@@ -1,3 +1,9 @@
+/**
+ * @module utils/cardMath
+ * Domain math, FX currency strategy formatting, filtering/sorting factories,
+ * and historical portfolio aggregation matching the MTG Vault Excel workbook.
+ */
+
 import type {
   AppLanguage,
   AppPreferences,
@@ -15,36 +21,81 @@ import type {
   PriceSource,
 } from '../types/card';
 
+/** Offline default EUR → USD conversion rate when none is persisted. */
 export const DEFAULT_EUR_TO_USD_RATE = 1.08;
 
+/** Subset of {@link AppPreferences} needed for currency & locale formatting. */
 export type FormatContext = Pick<
   AppPreferences,
   'language' | 'currency' | 'eurToUsdRate'
 >;
 
+/** Strategy contract for converting and labeling display currencies. */
+interface CurrencyStrategy {
+  symbol: string;
+  fromEur: (eurValue: number, eurToUsdRate: number) => number;
+}
+
+/**
+ * Rounds a number to 2 decimal places while normalizing `-0` to `0`.
+ *
+ * @param value Raw floating-point number.
+ * @returns Rounded value to 2 decimal places.
+ */
 export function round2(value: number): number {
   const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
   return Object.is(rounded, -0) || rounded === 0 ? 0 : rounded;
 }
 
+/**
+ * Validates and normalizes an exchange rate within sane bounds `(0.01, 1000)`.
+ *
+ * @param raw Candidate multiplier.
+ * @returns Validated multiplier rounded to 4 decimal places, or {@link DEFAULT_EUR_TO_USD_RATE}.
+ */
 export function normalizeExchangeRate(raw: number): number {
   return Number.isFinite(raw) && raw > 0.01 && raw < 1000
     ? Math.round(raw * 10000) / 10000
     : DEFAULT_EUR_TO_USD_RATE;
 }
 
+/** Strategy Registry mapping supported {@link CurrencyCode}s to conversion logic. */
+const CURRENCY_STRATEGIES: Record<CurrencyCode, CurrencyStrategy> = {
+  EUR: {
+    symbol: '€',
+    fromEur: (eurValue) => round2(eurValue),
+  },
+  USD: {
+    symbol: '$',
+    fromEur: (eurValue, eurToUsdRate) =>
+      round2(eurValue * normalizeExchangeRate(eurToUsdRate)),
+  },
+};
+
+/**
+ * Converts a base EUR amount into the target display currency.
+ *
+ * @param eurValue Amount in base EUR.
+ * @param currency Target currency code.
+ * @param eurToUsdRate Optional EUR→USD multiplier.
+ * @returns Converted amount rounded to 2 decimals.
+ */
 export function convertFromEur(
   eurValue: number,
   currency: CurrencyCode,
   eurToUsdRate: number = DEFAULT_EUR_TO_USD_RATE,
 ): number {
-  if (currency !== 'USD') {
-    return round2(eurValue);
-  }
-  const factor = normalizeExchangeRate(eurToUsdRate);
-  return round2(eurValue * factor);
+  const strategy = CURRENCY_STRATEGIES[currency] ?? CURRENCY_STRATEGIES.EUR;
+  return strategy.fromEur(eurValue, eurToUsdRate);
 }
 
+/**
+ * Resolves the primary display name for a card according to the active language.
+ *
+ * @param card Card naming fields.
+ * @param language Active UI language.
+ * @returns Preferred name, falling back to the alternate language if blank.
+ */
 export function getCardPrimaryName(
   card: Pick<CardHolding, 'nameEs' | 'nameEn'>,
   language: AppLanguage,
@@ -55,6 +106,13 @@ export function getCardPrimaryName(
   return card.nameEs.trim() || card.nameEn.trim();
 }
 
+/**
+ * Returns the alternate-language card name when distinct from the primary name.
+ *
+ * @param card Card naming fields.
+ * @param language Active UI language.
+ * @returns Alternate card name or `null` if identical/absent.
+ */
 export function getCardSecondaryName(
   card: Pick<CardHolding, 'nameEs' | 'nameEn'>,
   language: AppLanguage,
@@ -68,6 +126,13 @@ export function getCardSecondaryName(
   return alternate;
 }
 
+/**
+ * Computes total cost basis, market valuation, net profit, and ROI for a card holding.
+ *
+ * @param card Inventory holding entry.
+ * @param overrideUnitMarketEur Optional store-specific unit market override in EUR.
+ * @returns Financial metrics in base EUR (`roiPct` is `null` when total cost is zero).
+ */
 export function computeCardMetrics(
   card: CardHolding,
   overrideUnitMarketEur?: number,
@@ -84,6 +149,12 @@ export function computeCardMetrics(
   return { totalCost, totalMarket, profit, roiPct };
 }
 
+/**
+ * Aggregates cost, valuation, profit, and ROI across all provided cards in base EUR.
+ *
+ * @param cards Inventory cards.
+ * @returns Portfolio totals.
+ */
 export function computePortfolioSummary(
   cards: readonly CardHolding[],
 ): PortfolioSummary {
@@ -113,6 +184,15 @@ export function computePortfolioSummary(
   };
 }
 
+/**
+ * Resolves a card's latest unit valuation in EUR for a specific store source.
+ * Falls back to `card.marketPriceEur` when a store has no native series for the card.
+ *
+ * @param card Card holding.
+ * @param historyMap Optional map of store time series.
+ * @param source Target market source.
+ * @returns Resolved EUR price and whether a native store quote was available.
+ */
 export function computeSourceUnitPriceEur(
   card: CardHolding,
   historyMap: CardPriceHistoryMap | undefined,
@@ -120,12 +200,11 @@ export function computeSourceUnitPriceEur(
 ): { priceEur: number; hasNativePrice: boolean } {
   const pts = historyMap?.[source];
   if (pts && pts.length > 0) {
-    const latest = pts[pts.length - 1].price;
     if (source === 'Cardmarket') {
-      // Keep portfolio in sync if the user edited card.marketPriceEur manually
+      // Keep live valuation synchronized with manual Cardmarket edits on the holding
       return { priceEur: round2(card.marketPriceEur), hasNativePrice: true };
     }
-    return { priceEur: round2(latest), hasNativePrice: true };
+    return { priceEur: round2(pts[pts.length - 1].price), hasNativePrice: true };
   }
   return {
     priceEur: round2(card.marketPriceEur),
@@ -133,6 +212,14 @@ export function computeSourceUnitPriceEur(
   };
 }
 
+/**
+ * Computes portfolio totals for a given market source alongside native price coverage count.
+ *
+ * @param cards Inventory cards.
+ * @param allHistoryByCard Map from `card.id` to store series maps.
+ * @param source Selected store source.
+ * @returns Portfolio summary plus `coveredCount`.
+ */
 export function computePortfolioSummaryForSource(
   cards: readonly CardHolding[],
   allHistoryByCard: Record<string, CardPriceHistoryMap>,
@@ -192,8 +279,8 @@ function formatAmountInternal(
   prefs: FormatContext,
   signed: boolean,
 ): string {
-  const converted = convertFromEur(eurValue, prefs.currency, prefs.eurToUsdRate);
-  const normalized = round2(converted);
+  const strategy = CURRENCY_STRATEGIES[prefs.currency] ?? CURRENCY_STRATEGIES.EUR;
+  const normalized = round2(strategy.fromEur(eurValue, prefs.eurToUsdRate));
   const sign = signed
     ? normalized > 0
       ? '+'
@@ -211,15 +298,30 @@ function formatAmountInternal(
     isEn ? ',' : '.',
     isEn ? '.' : ',',
   );
-  const symbol = prefs.currency === 'USD' ? '$' : '€';
 
-  return isEn ? `${sign}${symbol}${numStr}` : `${sign}${numStr} ${symbol}`;
+  return isEn
+    ? `${sign}${strategy.symbol}${numStr}`
+    : `${sign}${numStr} ${strategy.symbol}`;
 }
 
+/**
+ * Formats a base EUR monetary value in the user's configured currency and locale.
+ *
+ * @param eurValue Amount in base EUR.
+ * @param prefs Display currency, FX rate, and language context.
+ * @returns Localized money string (e.g., `3.122,03 €` or `$3,371.79`).
+ */
 export function formatMoney(eurValue: number, prefs: FormatContext): string {
   return formatAmountInternal(eurValue, prefs, false);
 }
 
+/**
+ * Formats a base EUR monetary delta with explicit `+` / `-` sign.
+ *
+ * @param eurValue Signed amount in base EUR.
+ * @param prefs Display currency, FX rate, and language context.
+ * @returns Signed money string (e.g., `+915,67 €`).
+ */
 export function formatSignedMoney(
   eurValue: number,
   prefs: FormatContext,
@@ -227,6 +329,13 @@ export function formatSignedMoney(
   return formatAmountInternal(eurValue, prefs, true);
 }
 
+/**
+ * Formats a percentage ROI delta with 1 decimal place, or returns a zero-cost label.
+ *
+ * @param value ROI percentage or `null` when cost basis is zero.
+ * @param language Display language (`'es'` | `'en'`).
+ * @returns Formatted percentage string.
+ */
 export function formatSignedPct(
   value: number | null,
   language: AppLanguage = 'es',
@@ -247,6 +356,13 @@ export function formatSignedPct(
   return `${sign}${numStr}%`;
 }
 
+/**
+ * Parses a localized user decimal input (accepting `.` or `,`) into a non-negative number.
+ *
+ * @param raw Raw input string.
+ * @param fallback Value returned when empty or invalid.
+ * @returns Parsed non-negative number.
+ */
 export function parseDecimalInput(raw: string, fallback = 0): number {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -257,11 +373,24 @@ export function parseDecimalInput(raw: string, fallback = 0): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+/**
+ * Parses an integer quantity string clamped to `>= 1`.
+ *
+ * @param raw Raw input string.
+ * @param fallback Default quantity when invalid.
+ * @returns Parsed integer `>= 1`.
+ */
 export function parseIntInput(raw: string, fallback = 1): number {
   const parsed = Number.parseInt(raw.trim(), 10);
   return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
 }
 
+/**
+ * Normalizes diacritics and casing for diacritic-insensitive text search.
+ *
+ * @param text Raw string.
+ * @returns Lowercase trimmed ASCII-folded text.
+ */
 export function normalizeSearchText(text: string): string {
   return text
     .normalize('NFD')
@@ -270,11 +399,84 @@ export function normalizeSearchText(text: string): string {
     .trim();
 }
 
+/** Holding paired with its pre-calculated financial {@link CardMetrics}. */
 export interface CardWithMetrics {
   card: CardHolding;
   metrics: CardMetrics;
 }
 
+/** Strategy map of collection filter predicates keyed by {@link CardFilter}. */
+const CARD_FILTER_PREDICATES: Record<
+  CardFilter,
+  (metrics: CardMetrics) => boolean
+> = {
+  all: () => true,
+  gain: (m) => m.profit > 0,
+  loss: (m) => m.profit < 0,
+  zeroCost: (m) => m.totalCost <= 0,
+};
+
+/**
+ * Factory creating a specialized {@link CardWithMetrics} comparator for a sort criterion.
+ *
+ * @param sort Active sort criterion.
+ * @param language Language used for locale-aware alphabetical ordering.
+ * @returns Comparator compatible with `Array.prototype.sort`.
+ */
+export function createCardComparator(
+  sort: CardSort,
+  language: AppLanguage = 'es',
+): (a: CardWithMetrics, b: CardWithMetrics) => number {
+  const compareNames = (a: CardWithMetrics, b: CardWithMetrics) =>
+    getCardPrimaryName(a.card, language).localeCompare(
+      getCardPrimaryName(b.card, language),
+      language,
+    );
+
+  switch (sort) {
+    case 'value':
+      return (a, b) =>
+        b.metrics.totalMarket - a.metrics.totalMarket ||
+        b.metrics.profit - a.metrics.profit ||
+        compareNames(a, b);
+    case 'profit':
+      return (a, b) =>
+        b.metrics.profit - a.metrics.profit ||
+        b.metrics.totalMarket - a.metrics.totalMarket;
+    case 'loss':
+      return (a, b) =>
+        a.metrics.profit - b.metrics.profit ||
+        b.metrics.totalCost - a.metrics.totalCost;
+    case 'roi':
+      return (a, b) => {
+        const aRoi = a.metrics.roiPct;
+        const bRoi = b.metrics.roiPct;
+        if (aRoi === null && bRoi === null) {
+          return b.metrics.totalMarket - a.metrics.totalMarket;
+        }
+        if (aRoi === null) return 1;
+        if (bRoi === null) return -1;
+        return bRoi - aRoi || b.metrics.profit - a.metrics.profit;
+      };
+    case 'name':
+      return compareNames;
+    case 'date':
+      return (a, b) =>
+        b.card.purchaseDate.localeCompare(a.card.purchaseDate) ||
+        (b.card.createdAt ?? 0) - (a.card.createdAt ?? 0);
+  }
+}
+
+/**
+ * Filters and sorts inventory holdings using search query, predicate strategy, and sort factory.
+ *
+ * @param cards Full inventory array.
+ * @param query User search text.
+ * @param filter Profit/cost filter chip key.
+ * @param sort Active sort criterion.
+ * @param language Active display language for name sorting.
+ * @returns Filtered and sorted list of holdings paired with metrics.
+ */
 export function filterAndSortCards(
   cards: readonly CardHolding[],
   query: string,
@@ -283,14 +485,12 @@ export function filterAndSortCards(
   language: AppLanguage = 'es',
 ): CardWithMetrics[] {
   const normalizedQuery = normalizeSearchText(query);
+  const predicate = CARD_FILTER_PREDICATES[filter] ?? CARD_FILTER_PREDICATES.all;
   const items: CardWithMetrics[] = [];
 
   for (const card of cards) {
     const metrics = computeCardMetrics(card);
-
-    if (filter === 'gain' && metrics.profit <= 0) continue;
-    if (filter === 'loss' && metrics.profit >= 0) continue;
-    if (filter === 'zeroCost' && metrics.totalCost > 0) continue;
+    if (!predicate(metrics)) continue;
 
     if (normalizedQuery) {
       const haystack = normalizeSearchText(
@@ -302,53 +502,14 @@ export function filterAndSortCards(
     items.push({ card, metrics });
   }
 
-  items.sort((a, b) => {
-    switch (sort) {
-      case 'value':
-        return (
-          b.metrics.totalMarket - a.metrics.totalMarket ||
-          b.metrics.profit - a.metrics.profit ||
-          getCardPrimaryName(a.card, language).localeCompare(
-            getCardPrimaryName(b.card, language),
-            language,
-          )
-        );
-      case 'profit':
-        return (
-          b.metrics.profit - a.metrics.profit ||
-          b.metrics.totalMarket - a.metrics.totalMarket
-        );
-      case 'loss':
-        return (
-          a.metrics.profit - b.metrics.profit ||
-          b.metrics.totalCost - a.metrics.totalCost
-        );
-      case 'roi': {
-        const aRoi = a.metrics.roiPct;
-        const bRoi = b.metrics.roiPct;
-        if (aRoi === null && bRoi === null) {
-          return b.metrics.totalMarket - a.metrics.totalMarket;
-        }
-        if (aRoi === null) return 1;
-        if (bRoi === null) return -1;
-        return bRoi - aRoi || b.metrics.profit - a.metrics.profit;
-      }
-      case 'name':
-        return getCardPrimaryName(a.card, language).localeCompare(
-          getCardPrimaryName(b.card, language),
-          language,
-        );
-      case 'date': {
-        const dateCmp = b.card.purchaseDate.localeCompare(a.card.purchaseDate);
-        if (dateCmp !== 0) return dateCmp;
-        return (b.card.createdAt ?? 0) - (a.card.createdAt ?? 0);
-      }
-    }
-  });
-
-  return items;
+  return items.sort(createCardComparator(sort, language));
 }
 
+/**
+ * Returns today's local calendar date formatted as `YYYY-MM-DD`.
+ *
+ * @returns ISO date string.
+ */
 export function todayIsoDate(): string {
   const now = new Date();
   const y = now.getFullYear();
@@ -387,6 +548,28 @@ const MONTH_ABBR_EN = [
   'Dec',
 ] as const;
 
+const MONTH_TITLE_ES = [
+  'Ene',
+  'Feb',
+  'Mar',
+  'Abr',
+  'May',
+  'Jun',
+  'Jul',
+  'Ago',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dic',
+] as const;
+
+/**
+ * Formats an ISO date (`YYYY-MM-DD`) into a compact chart axis label (e.g., `07 sep` / `Sep 7`).
+ *
+ * @param isoDate ISO calendar string.
+ * @param language Display language.
+ * @returns Localized compact label.
+ */
 export function formatShortDate(
   isoDate: string,
   language: AppLanguage = 'es',
@@ -405,25 +588,39 @@ export function formatShortDate(
   return `${match[3]} ${monthLabel}`;
 }
 
+/**
+ * Shifts an ISO date (`YYYY-MM-DD`) by `deltaDays` days in UTC without DST drift.
+ *
+ * @param isoDate Base ISO date string.
+ * @param deltaDays Signed day offset.
+ * @returns Shifted ISO date string.
+ */
 export function shiftIsoDateDays(isoDate: string, deltaDays: number): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
   if (!match) {
     return isoDate;
   }
-  const y = Number.parseInt(match[1], 10);
-  const m = Number.parseInt(match[2], 10) - 1;
-  const d = Number.parseInt(match[3], 10);
-  const dt = new Date(Date.UTC(y, m, d + deltaDays));
-  const outY = dt.getUTCFullYear();
-  const outM = String(dt.getUTCMonth() + 1).padStart(2, '0');
-  const outD = String(dt.getUTCDate()).padStart(2, '0');
-  return `${outY}-${outM}-${outD}`;
+  const dt = new Date(
+    Date.UTC(
+      Number.parseInt(match[1], 10),
+      Number.parseInt(match[2], 10) - 1,
+      Number.parseInt(match[3], 10) + deltaDays,
+    ),
+  );
+  return formatUtcIsoDate(dt);
 }
 
-export function slicePriceHistory(
-  points: readonly PricePoint[],
+/**
+ * Generic date-range slicer preserving at least 2 trailing points for zoomable time series.
+ *
+ * @param points Chronologically ordered array with `date` keys.
+ * @param range Selected zoom window (`'7d'` | `'30d'` | `'all'`).
+ * @returns Sliced copy matching the zoom window.
+ */
+export function sliceByDateRange<T extends { date: string }>(
+  points: readonly T[],
   range: HistoryRange,
-): PricePoint[] {
+): T[] {
   if (range === 'all' || points.length <= 2) {
     return [...points];
   }
@@ -437,6 +634,21 @@ export function slicePriceHistory(
   return points.slice(-Math.min(points.length, daysBack));
 }
 
+/**
+ * Slices a card {@link PricePoint} series by date range.
+ *
+ * @param points Card historical prices.
+ * @param range Target range window.
+ * @returns Filtered array of price points.
+ */
+export function slicePriceHistory(
+  points: readonly PricePoint[],
+  range: HistoryRange,
+): PricePoint[] {
+  return sliceByDateRange(points, range);
+}
+
+/** Aggregated store history series together with coverage and all-time peaks. */
 export interface PortfolioHistoryResult {
   points: PortfolioHistoryPoint[];
   coveredCount: number;
@@ -444,6 +656,15 @@ export interface PortfolioHistoryResult {
   peakProfitEur: number;
 }
 
+/**
+ * Builds the daily portfolio valuation curve for a single store using carry-forward pricing
+ * and respecting each card's `purchaseDate`.
+ *
+ * @param cards Portfolio holdings.
+ * @param allHistoryByCard Map of card histories by store.
+ * @param source Store valuation source.
+ * @returns Time series points, native coverage count, and peak records.
+ */
 export function buildPortfolioHistorySeries(
   cards: readonly CardHolding[],
   allHistoryByCard: Record<string, CardPriceHistoryMap>,
@@ -486,7 +707,7 @@ export function buildPortfolioHistorySeries(
 
     const pts: PricePoint[] =
       storePts && storePts.length > 0
-        ? [...storePts]
+        ? storePts
         : [
             {
               date: card.purchaseDate || todayIsoDate(),
@@ -494,13 +715,7 @@ export function buildPortfolioHistorySeries(
             },
           ];
 
-    return {
-      card,
-      qty,
-      totalCardCost,
-      pts,
-      ptr: 0,
-    };
+    return { card, qty, totalCardCost, pts, ptr: 0 };
   });
 
   if (allDatesSet.size === 0) {
@@ -510,15 +725,6 @@ export function buildPortfolioHistorySeries(
   const sortedDates = Array.from(allDatesSet).sort((a, b) =>
     a.localeCompare(b),
   );
-
-  if (sortedDates.length === 0) {
-    return {
-      points: [],
-      coveredCount,
-      peakValueEur: 0,
-      peakProfitEur: 0,
-    };
-  }
 
   const points: PortfolioHistoryPoint[] = [];
   let peakValueEur = 0;
@@ -536,14 +742,11 @@ export function buildPortfolioHistorySeries(
         st.ptr += 1;
       }
 
-      const ownedOnDate =
-        !st.card.purchaseDate || st.card.purchaseDate <= date;
-      if (!ownedOnDate) {
+      if (st.card.purchaseDate && st.card.purchaseDate > date) {
         continue;
       }
 
       costSum += st.totalCardCost;
-      // Carry-forward if point exists on/before date, otherwise use earliest point
       const unitPrice =
         st.pts[st.ptr].date <= date ? st.pts[st.ptr].price : st.pts[0].price;
       marketSum += unitPrice * st.qty;
@@ -572,6 +775,13 @@ export function buildPortfolioHistorySeries(
   };
 }
 
+/**
+ * Builds daily portfolio valuation series for all 5 valuation sources.
+ *
+ * @param cards Inventory holdings.
+ * @param allHistoryByCard Store price history dictionary.
+ * @returns Record mapping each {@link PriceSource} to its {@link PortfolioHistoryResult}.
+ */
 export function buildAllStoreHistories(
   cards: readonly CardHolding[],
   allHistoryByCard: Record<string, CardPriceHistoryMap>,
@@ -582,11 +792,7 @@ export function buildAllStoreHistories(
       allHistoryByCard,
       'Cardmarket',
     ),
-    Scryfall: buildPortfolioHistorySeries(
-      cards,
-      allHistoryByCard,
-      'Scryfall',
-    ),
+    Scryfall: buildPortfolioHistorySeries(cards, allHistoryByCard, 'Scryfall'),
     TCGPlayer: buildPortfolioHistorySeries(
       cards,
       allHistoryByCard,
@@ -597,31 +803,25 @@ export function buildAllStoreHistories(
       allHistoryByCard,
       'CardKingdom',
     ),
-    ManaPool: buildPortfolioHistorySeries(
-      cards,
-      allHistoryByCard,
-      'ManaPool',
-    ),
+    ManaPool: buildPortfolioHistorySeries(cards, allHistoryByCard, 'ManaPool'),
   };
 }
 
+/**
+ * Slices a {@link PortfolioHistoryPoint} series by date range.
+ *
+ * @param points Daily portfolio points.
+ * @param range Target zoom window.
+ * @returns Filtered copy of portfolio history points.
+ */
 export function slicePortfolioHistory(
   points: readonly PortfolioHistoryPoint[],
   range: HistoryRange,
 ): PortfolioHistoryPoint[] {
-  if (range === 'all' || points.length <= 2) {
-    return [...points];
-  }
-  const daysBack = range === '7d' ? 7 : 30;
-  const lastDate = points[points.length - 1].date;
-  const cutoff = shiftIsoDateDays(lastDate, -daysBack);
-  const sliced = points.filter((p) => p.date >= cutoff);
-  if (sliced.length >= 2) {
-    return sliced;
-  }
-  return points.slice(-Math.min(points.length, daysBack));
+  return sliceByDateRange(points, range);
 }
 
+/** Single histogram bucket matching the 8 ROI brackets in Excel. */
 export interface RoiBucket {
   key: string;
   label: string;
@@ -630,19 +830,83 @@ export interface RoiBucket {
   isNegative: boolean;
 }
 
+const ROI_BUCKET_DEFS: readonly {
+  key: string;
+  label: string;
+  compactLabel: string;
+  isNegative: boolean;
+  matches: (roi: number) => boolean;
+}[] = [
+  {
+    key: 'lt-100',
+    label: '< -100%',
+    compactLabel: '<-100%',
+    isNegative: true,
+    matches: (roi) => roi < -100,
+  },
+  {
+    key: '-100..-50',
+    label: '-100% .. -50%',
+    compactLabel: '-100\n-50%',
+    isNegative: true,
+    matches: (roi) => roi >= -100 && roi < -50,
+  },
+  {
+    key: '-50..-25',
+    label: '-50% .. -25%',
+    compactLabel: '-50\n-25%',
+    isNegative: true,
+    matches: (roi) => roi >= -50 && roi < -25,
+  },
+  {
+    key: '-25..0',
+    label: '-25% .. 0%',
+    compactLabel: '-25\n0%',
+    isNegative: true,
+    matches: (roi) => roi >= -25 && roi < 0,
+  },
+  {
+    key: '0..25',
+    label: '0% .. +25%',
+    compactLabel: '0\n+25%',
+    isNegative: false,
+    matches: (roi) => roi >= 0 && roi < 25,
+  },
+  {
+    key: '25..50',
+    label: '+25% .. +50%',
+    compactLabel: '+25\n+50%',
+    isNegative: false,
+    matches: (roi) => roi >= 25 && roi < 50,
+  },
+  {
+    key: '50..100',
+    label: '+50% .. +100%',
+    compactLabel: '+50\n100%',
+    isNegative: false,
+    matches: (roi) => roi >= 50 && roi <= 100,
+  },
+  {
+    key: 'gt100',
+    label: '> +100%',
+    compactLabel: '>100%',
+    isNegative: false,
+    matches: (roi) => roi > 100,
+  },
+];
+
+/**
+ * Classifies paid holdings across the 8 ROI histogram brackets and tracks zero-cost holdings separately.
+ *
+ * @param items Holdings with computed {@link CardMetrics}.
+ * @returns 8 ordered buckets, zero-cost count, and max count for scaling.
+ */
 export function computeRoiBuckets(items: readonly CardWithMetrics[]): {
   buckets: RoiBucket[];
   zeroCostCount: number;
   maxCount: number;
 } {
-  let cLt100 = 0;
-  let c100to50 = 0;
-  let c50to25 = 0;
-  let c25to0 = 0;
-  let c0to25 = 0;
-  let c25to50 = 0;
-  let c50to100 = 0;
-  let cGt100 = 0;
+  const counts = new Array<number>(ROI_BUCKET_DEFS.length).fill(0);
   let zeroCostCount = 0;
 
   for (const item of items) {
@@ -651,77 +915,25 @@ export function computeRoiBuckets(items: readonly CardWithMetrics[]): {
       zeroCostCount += 1;
       continue;
     }
-    if (roi < -100) cLt100 += 1;
-    else if (roi < -50) c100to50 += 1;
-    else if (roi < -25) c50to25 += 1;
-    else if (roi < 0) c25to0 += 1;
-    else if (roi < 25) c0to25 += 1;
-    else if (roi < 50) c25to50 += 1;
-    else if (roi <= 100) c50to100 += 1;
-    else cGt100 += 1;
+    const bucketIdx = ROI_BUCKET_DEFS.findIndex((def) => def.matches(roi));
+    if (bucketIdx >= 0) {
+      counts[bucketIdx] += 1;
+    }
   }
 
-  const buckets: RoiBucket[] = [
-    {
-      key: 'lt-100',
-      label: '< -100%',
-      compactLabel: '<-100%',
-      count: cLt100,
-      isNegative: true,
-    },
-    {
-      key: '-100..-50',
-      label: '-100% .. -50%',
-      compactLabel: '-100\n-50%',
-      count: c100to50,
-      isNegative: true,
-    },
-    {
-      key: '-50..-25',
-      label: '-50% .. -25%',
-      compactLabel: '-50\n-25%',
-      count: c50to25,
-      isNegative: true,
-    },
-    {
-      key: '-25..0',
-      label: '-25% .. 0%',
-      compactLabel: '-25\n0%',
-      count: c25to0,
-      isNegative: true,
-    },
-    {
-      key: '0..25',
-      label: '0% .. +25%',
-      compactLabel: '0\n+25%',
-      count: c0to25,
-      isNegative: false,
-    },
-    {
-      key: '25..50',
-      label: '+25% .. +50%',
-      compactLabel: '+25\n+50%',
-      count: c25to50,
-      isNegative: false,
-    },
-    {
-      key: '50..100',
-      label: '+50% .. +100%',
-      compactLabel: '+50\n100%',
-      count: c50to100,
-      isNegative: false,
-    },
-    {
-      key: 'gt100',
-      label: '> +100%',
-      compactLabel: '>100%',
-      count: cGt100,
-      isNegative: false,
-    },
-  ];
+  const buckets: RoiBucket[] = ROI_BUCKET_DEFS.map((def, idx) => ({
+    key: def.key,
+    label: def.label,
+    compactLabel: def.compactLabel,
+    count: counts[idx],
+    isNegative: def.isNegative,
+  }));
 
-  const maxCount = Math.max(1, ...buckets.map((b) => b.count));
-  return { buckets, zeroCostCount, maxCount };
+  return {
+    buckets,
+    zeroCostCount,
+    maxCount: Math.max(1, ...counts),
+  };
 }
 
 function parseIsoDateUtc(isoDate: string): Date {
@@ -748,20 +960,24 @@ function formatUtcIsoDate(dt: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-function lookupDailyProfitOnOrBefore(
+/** Binary search (`O(log N)`) returning the latest point on or before `targetIso`. */
+function findLatestPointOnOrBefore(
   dailyPoints: readonly PortfolioHistoryPoint[],
   targetIso: string,
-): number | null {
-  if (dailyPoints.length === 0) return null;
-  let match: PortfolioHistoryPoint | null = null;
-  for (const pt of dailyPoints) {
-    if (pt.date <= targetIso) {
-      match = pt;
+): PortfolioHistoryPoint | null {
+  let lo = 0;
+  let hi = dailyPoints.length - 1;
+  let result: PortfolioHistoryPoint | null = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (dailyPoints[mid].date <= targetIso) {
+      result = dailyPoints[mid];
+      lo = mid + 1;
     } else {
-      break;
+      hi = mid - 1;
     }
   }
-  return match ? match.profit : null;
+  return result;
 }
 
 function computeBackfilledProfitOnDate(
@@ -772,8 +988,7 @@ function computeBackfilledProfitOnDate(
 ): number {
   let sum = 0;
   for (const card of cards) {
-    const owned = !card.purchaseDate || card.purchaseDate <= targetIso;
-    if (!owned) continue;
+    if (card.purchaseDate && card.purchaseDate > targetIso) continue;
     const { priceEur } = computeSourceUnitPriceEur(
       card,
       allHistoryByCard[card.id],
@@ -784,21 +999,40 @@ function computeBackfilledProfitOnDate(
   return round2(sum);
 }
 
-const MONTH_TITLE_ES = [
-  'Ene',
-  'Feb',
-  'Mar',
-  'Abr',
-  'May',
-  'Jun',
-  'Jul',
-  'Ago',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dic',
-] as const;
+/** Resolves net profit on `targetIso` from daily history or backfills from owned holdings. */
+function resolveProfitOnDate(
+  cards: readonly CardHolding[],
+  allHistoryByCard: Record<string, CardPriceHistoryMap>,
+  source: PriceSource,
+  dailyPoints: readonly PortfolioHistoryPoint[],
+  firstDailyDate: string | null,
+  targetIso: string,
+): number {
+  if (firstDailyDate !== null && targetIso >= firstDailyDate) {
+    const exact = findLatestPointOnOrBefore(dailyPoints, targetIso);
+    if (exact !== null) {
+      return exact.profit;
+    }
+  }
+  return computeBackfilledProfitOnDate(
+    cards,
+    allHistoryByCard,
+    source,
+    targetIso,
+  );
+}
 
+/**
+ * Computes net profit snapshots across the trailing `weeksCount` Sundays (default 20),
+ * backfilling dates prior to scraped daily history using active card holdings.
+ *
+ * @param cards Portfolio holdings.
+ * @param allHistoryByCard Store price histories.
+ * @param source Selected valuation store.
+ * @param weeksCount Number of trailing Sundays to emit.
+ * @param precomputedDailyPoints Optional memoized daily points for `source`.
+ * @returns Ordered weekly profit series (`dd/mm`).
+ */
 export function buildWeeklyProfitSeries(
   cards: readonly CardHolding[],
   allHistoryByCard: Record<string, CardPriceHistoryMap>,
@@ -818,45 +1052,44 @@ export function buildWeeklyProfitSeries(
       ? dailyPoints[dailyPoints.length - 1].date
       : todayIsoDate();
   const firstDailyDate = dailyPoints.length > 0 ? dailyPoints[0].date : null;
-
-  const maxDt = parseIsoDateUtc(maxDate);
-  // Step back to Sunday of maxDate's week (matches Excel maxD - WEEKDAY(maxD, 1) + 1)
-  const lastSundayIso = shiftIsoDateDays(maxDate, -maxDt.getUTCDay());
+  const lastSundayIso = shiftIsoDateDays(
+    maxDate,
+    -parseIsoDateUtc(maxDate).getUTCDay(),
+  );
 
   const result: PeriodicProfitPoint[] = [];
   for (let i = weeksCount - 1; i >= 0; i--) {
     const sunIso = shiftIsoDateDays(lastSundayIso, -i * 7);
     const [, mm, dd] = sunIso.split('-');
-    let profitEur = 0;
-    if (firstDailyDate !== null && sunIso >= firstDailyDate) {
-      const exact = lookupDailyProfitOnOrBefore(dailyPoints, sunIso);
-      profitEur =
-        exact !== null
-          ? exact
-          : computeBackfilledProfitOnDate(
-              cards,
-              allHistoryByCard,
-              source,
-              sunIso,
-            );
-    } else {
-      profitEur = computeBackfilledProfitOnDate(
-        cards,
-        allHistoryByCard,
-        source,
-        sunIso,
-      );
-    }
     result.push({
       key: sunIso,
       label: `${dd}/${mm}`,
-      profitEur,
+      profitEur: resolveProfitOnDate(
+        cards,
+        allHistoryByCard,
+        source,
+        dailyPoints,
+        firstDailyDate,
+        sunIso,
+      ),
     });
   }
 
   return result;
 }
 
+/**
+ * Computes net profit snapshots at each of the trailing `monthsCount` month-end dates (default 20),
+ * localized cleanly in Spanish or English (`Abr 25` / `Apr 25`).
+ *
+ * @param cards Portfolio holdings.
+ * @param allHistoryByCard Store price histories.
+ * @param source Selected valuation store.
+ * @param language Language for month abbreviations.
+ * @param monthsCount Number of trailing months.
+ * @param precomputedDailyPoints Optional memoized daily points for `source`.
+ * @returns Ordered monthly profit series.
+ */
 export function buildMonthlyProfitSeries(
   cards: readonly CardHolding[],
   allHistoryByCard: Record<string, CardPriceHistoryMap>,
@@ -890,47 +1123,24 @@ export function buildMonthlyProfitSeries(
     const monthEndIso = formatUtcIsoDate(monthEndDt);
     const targetIso = monthEndIso > maxDate ? maxDate : monthEndIso;
 
-    let profitEur = 0;
-    if (firstDailyDate !== null && targetIso >= firstDailyDate) {
-      const exact = lookupDailyProfitOnOrBefore(dailyPoints, targetIso);
-      profitEur =
-        exact !== null
-          ? exact
-          : computeBackfilledProfitOnDate(
-              cards,
-              allHistoryByCard,
-              source,
-              targetIso,
-            );
-    } else {
-      profitEur = computeBackfilledProfitOnDate(
-        cards,
-        allHistoryByCard,
-        source,
-        targetIso,
-      );
-    }
-
     const monthName =
       language === 'en'
         ? (MONTH_ABBR_EN[endMonth0] ?? '')
         : (MONTH_TITLE_ES[endMonth0] ?? '');
-    const shortYear = String(endYear).slice(-2);
 
     result.push({
       key: `${endYear}-${String(endMonth0 + 1).padStart(2, '0')}`,
-      label: `${monthName} ${shortYear}`,
-      profitEur,
+      label: `${monthName} ${String(endYear).slice(-2)}`,
+      profitEur: resolveProfitOnDate(
+        cards,
+        allHistoryByCard,
+        source,
+        dailyPoints,
+        firstDailyDate,
+        targetIso,
+      ),
     });
   }
 
   return result;
 }
-
-export const STORE_CHART_COLORS: Record<PriceSource, string> = {
-  Cardmarket: '#2563EB',
-  Scryfall: '#0D9488',
-  TCGPlayer: '#D97706',
-  CardKingdom: '#7C3AED',
-  ManaPool: '#DB2777',
-};

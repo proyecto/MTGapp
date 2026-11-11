@@ -1,3 +1,8 @@
+/**
+ * @module components/CardRow
+ * Memoized Calm Paper list row rendering a single MTG holding inside a grouped card list.
+ */
+
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { TABULAR_NUMS_STYLE, type AppTheme } from '../theme/tokens';
@@ -10,7 +15,8 @@ import {
   getCardSecondaryName,
 } from '../utils/cardMath';
 
-interface CardRowProps {
+/** Props accepted by {@link CardRow}. */
+export interface CardRowProps {
   card: CardHolding;
   metrics: CardMetrics;
   theme: AppTheme;
@@ -20,6 +26,13 @@ interface CardRowProps {
   onPress: (card: CardHolding) => void;
 }
 
+/**
+ * Displays set code badge, localized primary/alternate card names, quantity chip,
+ * tabular total valuation, net profit, and ROI for a card holding.
+ *
+ * @param props Card holding, precomputed metrics, list boundary flags, and press handler.
+ * @returns Memoized pressable row element.
+ */
 export const CardRow = React.memo(function CardRow({
   card,
   metrics,

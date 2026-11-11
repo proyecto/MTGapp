@@ -1,3 +1,9 @@
+/**
+ * @module components/charts/VerticalBarChart
+ * Interactive SVG vertical column chart supporting positive/negative diverging baselines,
+ * sparse/dense X-axis labeling, and tap-to-inspect bar callouts.
+ */
+
 import React, { useState } from 'react';
 import {
   LayoutChangeEvent,
@@ -13,15 +19,22 @@ import {
   type AppTheme,
 } from '../../theme/tokens';
 
+/** Single bar column rendered inside {@link VerticalBarChart}. */
 export interface VerticalBarDatum {
+  /** Unique column key. */
   key: string;
+  /** Compact axis tick text displayed below the column. */
   tickLabel: string;
+  /** Numeric bar magnitude (positive or negative). */
   value: number;
+  /** Positive polarity selects `theme.accent`; negative selects `theme.loss`. */
   positive: boolean;
+  /** Optional expanded label displayed in the top inspection badge when tapped. */
   inspectLabel?: string;
 }
 
-interface VerticalBarChartProps {
+/** Props accepted by {@link VerticalBarChart}. */
+export interface VerticalBarChartProps {
   title: string;
   subtitle: string;
   bars: VerticalBarDatum[];
@@ -37,6 +50,13 @@ interface VerticalBarChartProps {
 const CHART_HEIGHT = 128;
 const PAD_Y = 8;
 
+/**
+ * Renders interactive vertical bars with automatic diverging baseline calculation
+ * and tap-column inspection badges.
+ *
+ * @param props Chart bars, formatting callbacks, optional summary/footnote, and theme.
+ * @returns Styled card wrapping an interactive vertical bar SVG plot.
+ */
 export function VerticalBarChart({
   title,
   subtitle,

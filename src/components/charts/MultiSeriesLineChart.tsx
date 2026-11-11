@@ -1,7 +1,12 @@
+/**
+ * @module components/charts/MultiSeriesLineChart
+ * Reusable SVG multi-series line & area chart with date-range zoom, dashed reference lines,
+ * tabular min/max footer, and automatic empty-state rendering.
+ */
+
 import React, { useState } from 'react';
 import {
   LayoutChangeEvent,
-  Pressable,
   StyleSheet,
   Text,
   View,
@@ -20,14 +25,20 @@ import {
   type AppTheme,
 } from '../../theme/tokens';
 import type { HistoryRange } from '../../types/card';
-import { shiftIsoDateDays } from '../../utils/cardMath';
+import { sliceByDateRange } from '../../utils/cardMath';
+import { SegmentedToggle } from '../shared/FormControls';
 
+/** Single point plotted on {@link MultiSeriesLineChart}. */
 export interface LineChartPoint {
+  /** Sortable unique axis key (ISO date or ordinal index). */
   key: string;
+  /** Human-readable X-axis edge label. */
   axisLabel: string;
+  /** Numeric metric plotted on the Y axis. */
   value: number;
 }
 
+/** Visual series descriptor for {@link MultiSeriesLineChart}. */
 export interface LineChartSeries {
   id: string;
   label: string;
@@ -39,6 +50,7 @@ export interface LineChartSeries {
   formattedLatest?: string;
 }
 
+/** Horizontal reference threshold rendered behind curves (e.g., break-even cost or Base 100). */
 export interface ChartReferenceLine {
   id: string;
   value: number;
@@ -48,7 +60,8 @@ export interface ChartReferenceLine {
   label?: string;
 }
 
-interface MultiSeriesLineChartProps {
+/** Props accepted by {@link MultiSeriesLineChart}. */
+export interface MultiSeriesLineChartProps {
   title: string;
   subtitle: string;
   series: LineChartSeries[];
@@ -65,119 +78,73 @@ interface MultiSeriesLineChartProps {
   minMaxFormatter: (minStr: string, maxStr: string) => string;
   footnote?: string | null;
   emptyText: string;
+  /** Overrides SVG plot height in dp (default `150`). */
+  chartHeight?: number;
+  /** Overrides container background color (default `theme.surface`). */
+  containerBg?: string;
+  /** Renders subtle container drop shadow when true (default `true`). */
+  showShadow?: boolean;
+  /** Hides bottom series legend grid (useful for single-series card preview). */
+  hideLegend?: boolean;
+  /** Clamps lower Y bound to at least this value (e.g. `0` for non-negative prices). */
+  minYFloor?: number;
 }
 
 const RANGE_KEYS: HistoryRange[] = ['7d', '30d', 'all'];
-const CHART_HEIGHT = 150;
+const DEFAULT_CHART_HEIGHT = 150;
 const PAD_X = 6;
 const PAD_Y = 12;
 
-export function MultiSeriesLineChart({
-  title,
-  subtitle,
-  series,
-  referenceLines = [],
-  gradientId,
-  theme,
-  formatValue,
-  deltaBadge,
-  range,
-  onChangeRange,
-  rangeLabels,
-  leftControl,
-  singleRecordLabel,
-  minMaxFormatter,
-  footnote,
-  emptyText,
-}: MultiSeriesLineChartProps) {
-  const [chartWidth, setChartWidth] = useState(280);
-
-  function handleLayout(event: LayoutChangeEvent) {
-    const w = Math.floor(event.nativeEvent.layout.width);
-    if (w > 40 && w !== chartWidth) {
-      setChartWidth(w);
-    }
+/**
+ * Slices series points when a date-indexed zoom window (`7d` / `30d` / `all`) is active.
+ *
+ * @param series Input chart series list.
+ * @param range Active zoom range.
+ * @returns Sliced series array.
+ */
+function sliceSeriesByRange(
+  series: readonly LineChartSeries[],
+  range?: HistoryRange,
+): LineChartSeries[] {
+  if (!range || range === 'all') {
+    return [...series];
   }
 
-  // Collect and sort all unique keys across all series
-  const rawKeyToLabel = new Map<string, string>();
-  for (const s of series) {
-    for (const pt of s.points) {
-      if (!rawKeyToLabel.has(pt.key)) {
-        rawKeyToLabel.set(pt.key, pt.axisLabel);
-      }
-    }
-  }
-  const allSortedKeys = Array.from(rawKeyToLabel.keys()).sort((a, b) =>
-    a.localeCompare(b),
-  );
-
-  // Filter by ISO date range if range is active
-  let activeCutoffKey: string | null = null;
-  if (range && range !== 'all' && allSortedKeys.length > 2) {
-    const lastKey = allSortedKeys[allSortedKeys.length - 1];
-    if (/^\d{4}-\d{2}-\d{2}$/.test(lastKey)) {
-      const daysBack = range === '7d' ? 7 : 30;
-      activeCutoffKey = shiftIsoDateDays(lastKey, -daysBack);
-    }
-  }
-
-  const slicedSeries = series.map((s) => {
-    if (!activeCutoffKey) {
+  return series.map((s) => {
+    if (s.points.length <= 2) {
       return s;
     }
-    const filtered = s.points.filter((pt) => pt.key >= activeCutoffKey);
-    const pts =
-      filtered.length >= 2
-        ? filtered
-        : s.points.slice(
-            -Math.min(s.points.length, range === '7d' ? 7 : 30),
-          );
-    return { ...s, points: pts };
-  });
-
-  const visibleKeySet = new Set<string>();
-  for (const s of slicedSeries) {
-    for (const pt of s.points) {
-      visibleKeySet.add(pt.key);
+    const lastKey = s.points[s.points.length - 1].key;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(lastKey)) {
+      return s;
     }
-  }
-  const visibleKeys = Array.from(visibleKeySet).sort((a, b) =>
-    a.localeCompare(b),
-  );
-  const hasPoints = visibleKeys.length > 0;
+    const dated = s.points.map((pt) => ({ ...pt, date: pt.key }));
+    const sliced = sliceByDateRange(dated, range);
+    return {
+      ...s,
+      points: sliced.map(({ key, axisLabel, value }) => ({
+        key,
+        axisLabel,
+        value,
+      })),
+    };
+  });
+}
 
-  if (!hasPoints) {
-    return (
-      <View
-        style={[
-          styles.card,
-          CARD_SHADOW_STYLE,
-          { backgroundColor: theme.surface, borderColor: theme.border },
-        ]}
-      >
-        <View style={styles.titleBlock}>
-          <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
-          <Text style={[styles.subtitle, { color: theme.muted }]}>
-            {subtitle}
-          </Text>
-        </View>
-        {leftControl || (range && onChangeRange && rangeLabels) ? (
-          <View style={styles.toolbarRow}>
-            <View style={styles.toolbarLeft}>{leftControl}</View>
-          </View>
-        ) : null}
-        <Text style={[styles.emptyText, { color: theme.muted }]}>
-          {emptyText}
-        </Text>
-      </View>
-    );
-  }
-
-  const keyToIndex = new Map<string, number>();
-  visibleKeys.forEach((k, idx) => keyToIndex.set(k, idx));
-  const keyCount = visibleKeys.length;
-
+/**
+ * Computes Y-axis scaling bounds (`yMin`, `yMax`) and primary-series extremes across series.
+ * Exported so adapters like {@link PriceEvolutionChart} can align threshold visibility hints.
+ *
+ * @param slicedSeries Visible series points after range slicing.
+ * @param referenceLines Optional horizontal reference thresholds.
+ * @param minYFloor Optional floor bound (e.g. `0` for unit card prices).
+ * @returns Scaled Y axis boundaries alongside unpadded primary series min/max.
+ */
+export function computeLineChartYBounds(
+  slicedSeries: readonly LineChartSeries[],
+  referenceLines: readonly ChartReferenceLine[] = [],
+  minYFloor?: number,
+): { yMin: number; yMax: number; primaryMin: number; primaryMax: number } {
   let minVal = Number.POSITIVE_INFINITY;
   let maxVal = Number.NEGATIVE_INFINITY;
   let primaryMin = Number.POSITIVE_INFINITY;
@@ -212,12 +179,121 @@ export function MultiSeriesLineChart({
 
   const isFlat = maxVal === minVal;
   const span = maxVal - minVal;
-  const yMin = isFlat ? minVal - Math.max(1, Math.abs(minVal) * 0.05) : minVal - span * 0.12;
-  const yMax = isFlat ? maxVal + Math.max(1, Math.abs(maxVal) * 0.05) : maxVal + span * 0.1;
+  let yMin = isFlat
+    ? minVal - Math.max(1, Math.abs(minVal) * 0.05)
+    : minVal - span * 0.12;
+  const yMax = isFlat
+    ? maxVal + Math.max(1, Math.abs(maxVal) * 0.05)
+    : maxVal + span * 0.1;
+
+  if (minYFloor !== undefined) {
+    yMin = Math.max(minYFloor, yMin);
+  }
+
+  return { yMin, yMax, primaryMin, primaryMax };
+}
+
+/**
+ * Renders one or more continuous metric curves with gradient fill, reference baselines,
+ * range zoom toggles, min/max statistics, and optional legend rows.
+ *
+ * @param props Chart configuration and series data.
+ * @returns Styled card container wrapping an interactive SVG chart.
+ */
+export function MultiSeriesLineChart({
+  title,
+  subtitle,
+  series,
+  referenceLines = [],
+  gradientId,
+  theme,
+  formatValue,
+  deltaBadge,
+  range,
+  onChangeRange,
+  rangeLabels,
+  leftControl,
+  singleRecordLabel,
+  minMaxFormatter,
+  footnote,
+  emptyText,
+  chartHeight = DEFAULT_CHART_HEIGHT,
+  containerBg,
+  showShadow = true,
+  hideLegend = false,
+  minYFloor,
+}: MultiSeriesLineChartProps) {
+  const [chartWidth, setChartWidth] = useState(280);
+  const bg = containerBg ?? theme.surface;
+
+  function handleLayout(event: LayoutChangeEvent) {
+    const w = Math.floor(event.nativeEvent.layout.width);
+    if (w > 40 && w !== chartWidth) {
+      setChartWidth(w);
+    }
+  }
+
+  const rawKeyToLabel = new Map<string, string>();
+  for (const s of series) {
+    for (const pt of s.points) {
+      if (!rawKeyToLabel.has(pt.key)) {
+        rawKeyToLabel.set(pt.key, pt.axisLabel);
+      }
+    }
+  }
+
+  const slicedSeries = sliceSeriesByRange(series, range);
+  const visibleKeySet = new Set<string>();
+  for (const s of slicedSeries) {
+    for (const pt of s.points) {
+      visibleKeySet.add(pt.key);
+    }
+  }
+  const visibleKeys = Array.from(visibleKeySet).sort((a, b) =>
+    a.localeCompare(b),
+  );
+
+  if (visibleKeys.length === 0) {
+    return (
+      <View
+        style={[
+          styles.card,
+          showShadow && CARD_SHADOW_STYLE,
+          { backgroundColor: bg, borderColor: theme.border },
+        ]}
+      >
+        <View style={styles.titleBlock}>
+          <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
+          <Text style={[styles.subtitle, { color: theme.muted }]}>
+            {subtitle}
+          </Text>
+        </View>
+        {leftControl ? (
+          <View style={styles.toolbarRow}>
+            <View style={styles.toolbarLeft}>{leftControl}</View>
+          </View>
+        ) : null}
+        <Text style={[styles.emptyText, { color: theme.muted }]}>
+          {emptyText}
+        </Text>
+      </View>
+    );
+  }
+
+  const keyToIndex = new Map<string, number>();
+  visibleKeys.forEach((k, idx) => keyToIndex.set(k, idx));
+  const keyCount = visibleKeys.length;
+
+  const { yMin, yMax, primaryMin, primaryMax } = computeLineChartYBounds(
+    slicedSeries,
+    referenceLines,
+    minYFloor,
+  );
+  const isFlat = yMax === yMin;
   const ySpan = yMax - yMin || 1;
 
   const usableW = Math.max(40, chartWidth - PAD_X * 2);
-  const usableH = CHART_HEIGHT - PAD_Y * 2;
+  const usableH = chartHeight - PAD_Y * 2;
 
   const toX = (index: number) =>
     keyCount <= 1
@@ -229,18 +305,15 @@ export function MultiSeriesLineChart({
       ? PAD_Y + usableH / 2
       : PAD_Y + usableH - ((val - yMin) / ySpan) * usableH;
 
-  const filledSeriesIndex = slicedSeries.findIndex(
-    (s) => s.filled && s.points.length >= 2,
-  );
   const fillSeries =
-    filledSeriesIndex >= 0 ? slicedSeries[filledSeriesIndex] : null;
+    slicedSeries.find((s) => s.filled && s.points.length >= 2) ?? null;
   const fillColor = fillSeries ? fillSeries.color : theme.accent;
 
   const rawZeroY = toY(0);
   const anchorY =
     yMin < 0 && yMax > 0
-      ? Math.min(CHART_HEIGHT - PAD_Y, Math.max(PAD_Y, rawZeroY))
-      : CHART_HEIGHT - PAD_Y;
+      ? Math.min(chartHeight - PAD_Y, Math.max(PAD_Y, rawZeroY))
+      : chartHeight - PAD_Y;
 
   const firstAxisLabel = rawKeyToLabel.get(visibleKeys[0]) ?? visibleKeys[0];
   const lastAxisLabel =
@@ -254,11 +327,10 @@ export function MultiSeriesLineChart({
     <View
       style={[
         styles.card,
-        CARD_SHADOW_STYLE,
-        { backgroundColor: theme.surface, borderColor: theme.border },
+        showShadow && CARD_SHADOW_STYLE,
+        { backgroundColor: bg, borderColor: theme.border },
       ]}
     >
-      {/* Header */}
       <View style={styles.titleBlock}>
         <Text style={[styles.title, { color: theme.text }]} numberOfLines={2}>
           {title}
@@ -284,53 +356,28 @@ export function MultiSeriesLineChart({
         </View>
       </View>
 
-      {/* Controls Toolbar */}
       {hasToolbar ? (
         <View style={styles.toolbarRow}>
           <View style={styles.toolbarLeft}>{leftControl}</View>
           {range && onChangeRange && rangeLabels ? (
-            <View
-              style={[
-                styles.rangeGroup,
-                { backgroundColor: theme.surfaceSubtle },
-              ]}
-            >
-              {RANGE_KEYS.map((key) => {
-                const active = range === key;
-                return (
-                  <Pressable
-                    key={key}
-                    onPress={() => onChangeRange(key)}
-                    hitSlop={4}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    style={[
-                      styles.rangeBtn,
-                      active && { backgroundColor: theme.surface },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.rangeBtnText,
-                        {
-                          color: active ? theme.accent : theme.muted,
-                          fontWeight: active ? '700' : '500',
-                        },
-                      ]}
-                    >
-                      {rangeLabels[key]}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+            <SegmentedToggle
+              value={range}
+              onChange={onChangeRange}
+              theme={theme}
+              options={RANGE_KEYS.map((key) => ({
+                value: key,
+                label: rangeLabels[key],
+              }))}
+            />
           ) : null}
         </View>
       ) : null}
 
-      {/* SVG Plot */}
-      <View style={styles.svgContainer} onLayout={handleLayout}>
-        <Svg width={chartWidth} height={CHART_HEIGHT}>
+      <View
+        style={[styles.svgContainer, { height: chartHeight }]}
+        onLayout={handleLayout}
+      >
+        <Svg width={chartWidth} height={chartHeight}>
           <Defs>
             <LinearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0%" stopColor={fillColor} stopOpacity={0.2} />
@@ -338,7 +385,6 @@ export function MultiSeriesLineChart({
             </LinearGradient>
           </Defs>
 
-          {/* Horizontal Guide Lines */}
           <Line
             x1={PAD_X}
             y1={PAD_Y}
@@ -349,26 +395,25 @@ export function MultiSeriesLineChart({
           />
           <Line
             x1={PAD_X}
-            y1={CHART_HEIGHT / 2}
+            y1={chartHeight / 2}
             x2={chartWidth - PAD_X}
-            y2={CHART_HEIGHT / 2}
+            y2={chartHeight / 2}
             stroke={theme.divider}
             strokeWidth={1}
             strokeDasharray="3 4"
           />
           <Line
             x1={PAD_X}
-            y1={CHART_HEIGHT - PAD_Y}
+            y1={chartHeight - PAD_Y}
             x2={chartWidth - PAD_X}
-            y2={CHART_HEIGHT - PAD_Y}
+            y2={chartHeight - PAD_Y}
             stroke={theme.divider}
             strokeWidth={1}
           />
 
-          {/* Optional Reference Lines (0 baseline, Peak line) */}
           {referenceLines.map((ref) => {
             const ry = toY(ref.value);
-            if (ry < PAD_Y - 1 || ry > CHART_HEIGHT - PAD_Y + 1) {
+            if (ry < PAD_Y - 1 || ry > chartHeight - PAD_Y + 1) {
               return null;
             }
             return (
@@ -386,7 +431,6 @@ export function MultiSeriesLineChart({
             );
           })}
 
-          {/* Series Area Fill (draw behind curves) */}
           {fillSeries
             ? (() => {
                 const coords = fillSeries.points.map((pt) => ({
@@ -404,7 +448,6 @@ export function MultiSeriesLineChart({
               })()
             : null}
 
-          {/* Series Curves + Terminal Points */}
           {slicedSeries.map((s) => {
             if (s.points.length === 0) {
               return null;
@@ -443,7 +486,7 @@ export function MultiSeriesLineChart({
                     cy={lastCoord.y}
                     r={coords.length === 1 ? 4.2 : 3.6}
                     fill={s.color}
-                    stroke={theme.surface}
+                    stroke={bg}
                     strokeWidth={1.6}
                   />
                 ) : null}
@@ -453,7 +496,6 @@ export function MultiSeriesLineChart({
         </Svg>
       </View>
 
-      {/* Date Axis & Min/Max */}
       <View style={styles.axisRow}>
         <Text
           style={[styles.axisText, TABULAR_NUMS_STYLE, { color: theme.muted }]}
@@ -482,42 +524,52 @@ export function MultiSeriesLineChart({
         </Text>
       </View>
 
-      {/* Legend Grid */}
-      <View style={[styles.legendWrap, { borderTopColor: theme.divider }]}>
-        {slicedSeries.map((s) => {
-          const lastPt = s.points[s.points.length - 1];
-          const valText =
-            s.formattedLatest ?? (lastPt ? formatValue(lastPt.value) : '—');
-          return (
-            <View key={s.id} style={styles.legendItem}>
-              {s.dashed ? (
-                <View
-                  style={[styles.legendLineDashed, { borderColor: s.color }]}
-                />
-              ) : (
-                <View
-                  style={[styles.legendLineSolid, { backgroundColor: s.color }]}
-                />
-              )}
-              <Text style={[styles.legendText, { color: theme.muted }]}>
-                {s.label}:{' '}
-                <Text
-                  style={[
-                    styles.legendStrong,
-                    TABULAR_NUMS_STYLE,
-                    { color: theme.text },
-                  ]}
-                >
-                  {valText}
+      {!hideLegend ? (
+        <View style={[styles.legendWrap, { borderTopColor: theme.divider }]}>
+          {slicedSeries.map((s) => {
+            const lastPt = s.points[s.points.length - 1];
+            const valText =
+              s.formattedLatest ?? (lastPt ? formatValue(lastPt.value) : '—');
+            return (
+              <View key={s.id} style={styles.legendItem}>
+                {s.dashed ? (
+                  <View
+                    style={[styles.legendLineDashed, { borderColor: s.color }]}
+                  />
+                ) : (
+                  <View
+                    style={[
+                      styles.legendLineSolid,
+                      { backgroundColor: s.color },
+                    ]}
+                  />
+                )}
+                <Text style={[styles.legendText, { color: theme.muted }]}>
+                  {s.label}:{' '}
+                  <Text
+                    style={[
+                      styles.legendStrong,
+                      TABULAR_NUMS_STYLE,
+                      { color: theme.text },
+                    ]}
+                  >
+                    {valText}
+                  </Text>
                 </Text>
-              </Text>
-            </View>
-          );
-        })}
-      </View>
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
 
       {footnote ? (
-        <Text style={[styles.footnoteText, { color: theme.muted }]}>
+        <Text
+          style={[
+            styles.footnoteText,
+            TABULAR_NUMS_STYLE,
+            { color: theme.muted },
+          ]}
+        >
           {footnote}
         </Text>
       ) : null}
@@ -565,24 +617,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexShrink: 1,
   },
-  rangeGroup: {
-    flexDirection: 'row',
-    borderRadius: 9,
-    padding: 2,
-    gap: 2,
-    flexShrink: 0,
-  },
-  rangeBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 7,
-  },
-  rangeBtnText: {
-    fontSize: 11,
-  },
   svgContainer: {
     width: '100%',
-    height: CHART_HEIGHT,
   },
   axisRow: {
     flexDirection: 'row',
@@ -640,4 +676,3 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
 });
-

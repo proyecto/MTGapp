@@ -1,3 +1,8 @@
+/**
+ * @module components/charts/HorizontalRankingChart
+ * Interactive ranked horizontal single- and stacked-bar list card for top portfolio holdings.
+ */
+
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import {
@@ -6,7 +11,9 @@ import {
   type AppTheme,
 } from '../../theme/tokens';
 
+/** Single ranked row rendered inside {@link HorizontalRankingChart}. */
 export interface HorizontalBarItem {
+  /** Target card identifier passed to `onPressCard`. */
   cardId: string;
   primaryName: string;
   metaText: string;
@@ -19,12 +26,14 @@ export interface HorizontalBarItem {
   secondaryBarColor?: string;
 }
 
+/** Legend swatch item displayed when stacked bars are present. */
 export interface HorizontalBarLegendItem {
   label: string;
   color: string;
 }
 
-interface HorizontalRankingChartProps {
+/** Props accepted by {@link HorizontalRankingChart}. */
+export interface HorizontalRankingChartProps {
   title: string;
   subtitle: string;
   headerRight?: React.ReactNode;
@@ -36,6 +45,12 @@ interface HorizontalRankingChartProps {
   onPressCard: (cardId: string) => void;
 }
 
+/**
+ * Renders top card rankings with proportional horizontal bars and drill-down tap navigation.
+ *
+ * @param props Ranked items, header action slot, optional stacked legend, and card press handler.
+ * @returns Card wrapping ranked pressable rows.
+ */
 export function HorizontalRankingChart({
   title,
   subtitle,

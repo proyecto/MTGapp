@@ -1,3 +1,9 @@
+/**
+ * @module screens/CollectionScreen
+ * Primary inventory list screen featuring portfolio hero valuation, instant search/filtering,
+ * grouped card rows, and a floating quick-add button.
+ */
+
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -30,7 +36,8 @@ import {
   type CardWithMetrics,
 } from '../utils/cardMath';
 
-interface CollectionScreenProps {
+/** Props accepted by {@link CollectionScreen}. */
+export interface CollectionScreenProps {
   cards: CardHolding[];
   loading: boolean;
   loadError: string | null;
@@ -41,6 +48,12 @@ interface CollectionScreenProps {
   onOpenQuickAdd: () => void;
 }
 
+/**
+ * Scrollable virtualized card collection screen with live profit/ROI filters and sort modal.
+ *
+ * @param props Inventory holdings, loading/error state, theme, preferences, and action callbacks.
+ * @returns Collection screen layout with floating "+" button.
+ */
 export function CollectionScreen({
   cards,
   loading,

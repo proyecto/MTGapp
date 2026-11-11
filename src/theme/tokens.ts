@@ -1,8 +1,15 @@
-import { Platform } from 'react-native';
-import type { ThemeId } from '../types/card';
+/**
+ * @module theme/tokens
+ * Design tokens, Theme Registry, and accessible chart series palettes following the Calm Paper system.
+ */
 
+import { Platform } from 'react-native';
+import type { PriceSource, ThemeId } from '../types/card';
+
+/** Contrast polarity for system status bar & derived color palettes. */
 export type ThemeMode = 'light' | 'dark';
 
+/** Complete semantic color contract implemented by every theme in {@link THEME_REGISTRY}. */
 export interface AppTheme {
   id: ThemeId;
   mode: ThemeMode;
@@ -25,6 +32,7 @@ export interface AppTheme {
   backdrop: string;
 }
 
+/** Default daytime theme inspired by Things 3 / Todoist Calm Paper surfaces. */
 export const LIGHT_THEME: AppTheme = {
   id: 'light',
   mode: 'light',
@@ -47,6 +55,7 @@ export const LIGHT_THEME: AppTheme = {
   backdrop: 'rgba(15, 23, 42, 0.42)',
 };
 
+/** Low-glare slate theme calibrated for comfortable contrast on OLED and LCD screens. */
 export const DARK_THEME: AppTheme = {
   id: 'dark',
   mode: 'dark',
@@ -69,15 +78,63 @@ export const DARK_THEME: AppTheme = {
   backdrop: 'rgba(0, 0, 0, 0.65)',
 };
 
+/**
+ * Extensible Theme Registry keyed by {@link ThemeId}.
+ * Adding a new {@link ThemeId} requires registering its token object here.
+ */
 export const THEME_REGISTRY: Record<ThemeId, AppTheme> = {
   light: LIGHT_THEME,
   dark: DARK_THEME,
 };
 
+/**
+ * Resolves a theme by identifier with safe fallback to {@link LIGHT_THEME}.
+ *
+ * @param themeId Requested theme identifier.
+ * @returns Concrete {@link AppTheme} token palette.
+ */
+export function resolveTheme(themeId: ThemeId): AppTheme {
+  return THEME_REGISTRY[themeId] ?? LIGHT_THEME;
+}
+
+const STORE_SERIES_COLORS_LIGHT: Record<PriceSource, string> = {
+  Cardmarket: '#2563EB',
+  Scryfall: '#0D9488',
+  TCGPlayer: '#D97706',
+  CardKingdom: '#7C3AED',
+  ManaPool: '#DB2777',
+};
+
+const STORE_SERIES_COLORS_DARK: Record<PriceSource, string> = {
+  Cardmarket: '#60A5FA',
+  Scryfall: '#2DD4BF',
+  TCGPlayer: '#FBBF24',
+  CardKingdom: '#A78BFA',
+  ManaPool: '#F472B6',
+};
+
+/**
+ * Resolves a high-contrast line color for a given valuation store and theme polarity.
+ *
+ * @param source Store identifier.
+ * @param mode Theme light/dark mode.
+ * @returns Hex color string.
+ */
+export function getStoreSeriesColor(
+  source: PriceSource,
+  mode: ThemeMode,
+): string {
+  return mode === 'dark'
+    ? STORE_SERIES_COLORS_DARK[source]
+    : STORE_SERIES_COLORS_LIGHT[source];
+}
+
+/** Shared monospace-numeral font variant for financial alignment. */
 export const TABULAR_NUMS_STYLE = {
   fontVariant: ['tabular-nums' as const],
 };
 
+/** Cross-platform subtle card elevation shadow. */
 export const CARD_SHADOW_STYLE = Platform.select({
   ios: {
     shadowColor: '#000000',

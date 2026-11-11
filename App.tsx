@@ -1,3 +1,9 @@
+/**
+ * @module App
+ * Root Expo application entrypoint orchestrating SQLite hydration, user preferences,
+ * top-level navigation between Collection and Analytics tabs, and slide-up modal sheets.
+ */
+
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, useColorScheme, View } from 'react-native';
@@ -19,7 +25,7 @@ import {
 import { getTranslations } from './src/i18n/translations';
 import { CollectionScreen } from './src/screens/CollectionScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
-import { LIGHT_THEME, THEME_REGISTRY } from './src/theme/tokens';
+import { resolveTheme } from './src/theme/tokens';
 import type {
   AppPreferences,
   CardHolding,
@@ -33,6 +39,11 @@ import {
   getCardPrimaryName,
 } from './src/utils/cardMath';
 
+/**
+ * Stateful root coordinator managing portfolio state, preferences, toasts, and modals.
+ *
+ * @returns Root application view wrapped in `SafeAreaView`.
+ */
 function AppContent() {
   const systemScheme = useColorScheme();
   const systemDefaultThemeId: ThemeId =
@@ -62,7 +73,7 @@ function AppContent() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialLoadStartedRef = useRef(false);
 
-  const theme = THEME_REGISTRY[preferences.themeId] ?? LIGHT_THEME;
+  const theme = resolveTheme(preferences.themeId);
   const t = getTranslations(preferences.language);
   const loadError = loadFailed ? t.common.dbOpenError : null;
 
@@ -310,6 +321,11 @@ function AppContent() {
   );
 }
 
+/**
+ * Root exported Expo component providing `SafeAreaProvider` context.
+ *
+ * @returns Top-level React element.
+ */
 export default function App() {
   return (
     <SafeAreaProvider>

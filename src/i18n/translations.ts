@@ -1,3 +1,8 @@
+/**
+ * @module i18n/translations
+ * Complete Spanish and English UI translation dictionaries (Registry pattern keyed by {@link AppLanguage}).
+ */
+
 import type {
   AppLanguage,
   CardFilter,
@@ -7,6 +12,7 @@ import type {
   ThemeId,
 } from '../types/card';
 
+/** Complete localization dictionary contract enforced at compile time for every supported language. */
 export interface Translations {
   tabs: {
     collection: string;
@@ -712,6 +718,12 @@ const EN: Translations = {
   },
 };
 
+/**
+ * Returns the UI translation dictionary for the requested language.
+ *
+ * @param language Active language code (`'es'` | `'en'`).
+ * @returns Strongly typed {@link Translations} dictionary.
+ */
 export function getTranslations(language: AppLanguage): Translations {
   return language === 'en' ? EN : ES;
 }
